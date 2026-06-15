@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -65,8 +66,9 @@ type Model struct {
 	popupCursor  int
 	thinkSetting string
 
-	copyCursor  int
-	infoMessage string
+	copyCursor       int
+	infoMessage      string
+	renderedMessages []string
 }
 
 var (
@@ -231,7 +233,7 @@ func (m Model) sendStreamMessageCmd(ch chan StreamMsg) tea.Cmd {
 	}
 }
 
-func (m Model) renderChatContent() string {
+func (m *Model) renderChatContent() string {
 	var s strings.Builder
 
 	if len(m.messages) == 0 {
@@ -242,6 +244,11 @@ func (m Model) renderChatContent() string {
 	innerWidth := m.viewport.Width - 2
 	if innerWidth < 10 {
 		innerWidth = 10
+	}
+
+	// Ensure cache is initialized and matches the size of messages
+	if len(m.renderedMessages) != len(m.messages) {
+		m.renderedMessages = make([]string, len(m.messages))
 	}
 
 	for i, msg := range m.messages {
@@ -295,7 +302,33 @@ func (m Model) renderChatContent() string {
 		}
 
 		// Wrap content and color it
-		wrappedContent := lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
+		var wrappedContent string
+		if msg.Role == "assistant" {
+			// If it is the last message and we are currently responding/streaming,
+			// render dynamically without using/saving cache.
+			isStreaming := m.isResponding && i == len(m.messages)-1
+			if !isStreaming && m.renderedMessages[i] != "" {
+				wrappedContent = m.renderedMessages[i]
+			} else {
+				renderer, err := glamour.NewTermRenderer(
+					glamour.WithStandardStyle("dark"),
+					glamour.WithWordWrap(contentWidth),
+				)
+				if err == nil {
+					if rendered, err := renderer.Render(content); err == nil {
+						wrappedContent = strings.TrimRight(rendered, "\n")
+						if !isStreaming {
+							m.renderedMessages[i] = wrappedContent
+						}
+					}
+				}
+			}
+		}
+
+		if wrappedContent == "" {
+			wrappedContent = lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
+		}
+
 		if m.state == stateCopy {
 			lines := strings.Split(wrappedContent, "\n")
 			for idx, line := range lines {
@@ -341,11 +374,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.renderedMessages = nil
 
 		// Only setup components if we meet minimum terminal size
 		if m.width >= 80 && m.height >= 18 {
 			vHeight := max(m.height-m.baseHeight(), 3)
-			vWidth := m.width - 4
+			vWidth := m.width - 8
 
 			if !m.ready {
 				m.viewport = viewport.New(vWidth, vHeight)
@@ -364,7 +398,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Adjust textinput width based on the left side allocation
 			modelBoxWidth := 24
-			inputWidth := vWidth + 2 - modelBoxWidth
+			inputWidth := vWidth + 8 - modelBoxWidth
 			m.textInput.Width = inputWidth - 6
 		}
 
@@ -420,6 +454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.messages) > 0 {
 					m.state = stateCopy
 					m.copyCursor = len(m.messages) - 1
+					m.renderedMessages = nil
 					m.textInput.Blur()
 					m.scrollToSelectedMessage()
 					if m.ready {
@@ -463,6 +498,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						case "/new":
 							m.messages = nil
 							m.messagesMetrics = nil
+							m.renderedMessages = nil
 							m.inputTokens = 0
 							m.outputTokens = 0
 							m.err = nil
@@ -572,6 +608,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "/new":
 					m.messages = nil
 					m.messagesMetrics = nil
+					m.renderedMessages = nil
 					m.inputTokens = 0
 					m.outputTokens = 0
 					m.err = nil
@@ -621,6 +658,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						switch setting {
 						case "false", "true", "low", "medium", "high", "max":
 							m.thinkSetting = setting
+							m.renderedMessages = nil
 							m.textInput.Reset()
 							m.popupCursor = 0
 							m.err = nil
@@ -684,6 +722,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.messagesMetrics = m.messagesMetrics[1:]
 							}
 						}
+						m.renderedMessages = nil
 						m.textInput.Reset()
 						m.popupCursor = 0
 						m.err = nil
@@ -717,6 +756,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						} else {
 							m.infoMessage = fmt.Sprintf("Session '%s' loaded successfully!", name)
 						}
+						m.renderedMessages = nil
 						m.textInput.Reset()
 						m.popupCursor = 0
 						if m.ready {
@@ -804,6 +844,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.infoMessage = "Copied message to clipboard!"
 					}
 					m.state = stateChat
+					m.renderedMessages = nil
 					m.textInput.Focus()
 					if m.ready {
 						m.viewport.SetContent(m.renderChatContent())
@@ -813,6 +854,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "esc", "ctrl+y":
 				m.state = stateChat
+				m.renderedMessages = nil
 				m.textInput.Focus()
 				if m.ready {
 					m.viewport.SetContent(m.renderChatContent())
@@ -1026,13 +1068,13 @@ func (m Model) View() string {
 
 		// 2. Viewport container (with border)
 		viewportBox := viewportContainerStyle.
-			Width(m.viewport.Width).
-			Height(m.viewport.Height).
+			Width(m.viewport.Width + 4).
+			Height(m.viewport.Height + 2).
 			Render(m.viewport.View())
 
 		// 3. Side-by-side Input container & Model box
 		modelBoxWidth := 24
-		inputWidth := m.viewport.Width + 2 - modelBoxWidth
+		inputWidth := m.viewport.Width + 8 - modelBoxWidth
 
 		inputBorderColor := "#00ADD8"
 		if m.state == stateCopy {
@@ -1200,7 +1242,7 @@ func (m *Model) scrollToSelectedMessage() {
 		return
 	}
 
-	innerWidth := m.viewport.Width - 2
+	innerWidth := m.viewport.Width
 	if innerWidth < 10 {
 		innerWidth = 10
 	}
@@ -1253,7 +1295,33 @@ func (m *Model) scrollToSelectedMessage() {
 			content = stripReasoning(content)
 		}
 
-		wrappedContent := lipgloss.NewStyle().Width(contentWidth).Render(content)
+		var wrappedContent string
+		if msg.Role == "assistant" {
+			if len(m.renderedMessages) != len(m.messages) {
+				m.renderedMessages = make([]string, len(m.messages))
+			}
+			isStreaming := m.isResponding && i == len(m.messages)-1
+			if !isStreaming && m.renderedMessages[i] != "" {
+				wrappedContent = m.renderedMessages[i]
+			} else {
+				renderer, err := glamour.NewTermRenderer(
+					glamour.WithStandardStyle("dark"),
+					glamour.WithWordWrap(contentWidth),
+				)
+				if err == nil {
+					if rendered, err := renderer.Render(content); err == nil {
+						wrappedContent = strings.TrimRight(rendered, "\n")
+						if !isStreaming {
+							m.renderedMessages[i] = wrappedContent
+						}
+					}
+				}
+			}
+		}
+
+		if wrappedContent == "" {
+			wrappedContent = lipgloss.NewStyle().Width(contentWidth).Render(content)
+		}
 
 		msgLines := 1 + strings.Count(wrappedContent, "\n")
 
