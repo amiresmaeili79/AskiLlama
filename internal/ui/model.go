@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"askillama/internal/config"
 	"askillama/internal/ollama"
@@ -35,13 +36,14 @@ var actions = []action{
 }
 
 type Model struct {
-	cfg          *config.Config
-	client       *ollama.Client
-	messages     []ollama.Message
-	textInput    textinput.Model
-	viewport     viewport.Model
-	err          error
-	isResponding bool
+	cfg             *config.Config
+	client          *ollama.Client
+	messages        []ollama.Message
+	messagesMetrics []*ollama.ResponseMetrics
+	textInput       textinput.Model
+	viewport        viewport.Model
+	err             error
+	isResponding    bool
 
 	state  state
 	models []string
@@ -110,6 +112,10 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#FF79C6")).
 				Padding(0, 1)
+
+	metricsStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6272A4")).
+			Italic(true)
 )
 
 func NewModel(cfg *config.Config) Model {
@@ -156,31 +162,28 @@ func (m Model) fetchModelsCmd() tea.Cmd {
 }
 
 type responseMsg struct {
-	content      string
-	promptTokens int
-	evalTokens   int
-	err          error
+	content string
+	metrics ollama.ResponseMetrics
+	err     error
 }
 
 func (m Model) sendMessageCmd(prompt string) tea.Cmd {
 	return func() tea.Msg {
-		resp, promptTokens, evalTokens, err := m.client.Chat(m.cfg.CurrentModel, m.messages, m.thinkSetting)
+		resp, metrics, err := m.client.Chat(m.cfg.CurrentModel, m.messages, m.thinkSetting)
 		return responseMsg{
-			content:      resp,
-			promptTokens: promptTokens,
-			evalTokens:   evalTokens,
-			err:          err,
+			content: resp,
+			metrics: metrics,
+			err:     err,
 		}
 	}
 }
 
 type StreamMsg struct {
-	Content      string
-	PromptTokens int
-	EvalTokens   int
-	Done         bool
-	Err          error
-	Channel      chan StreamMsg
+	Content string
+	Metrics ollama.ResponseMetrics
+	Done    bool
+	Err     error
+	Channel chan StreamMsg
 }
 
 func listenToStream(ch chan StreamMsg) tea.Cmd {
@@ -197,12 +200,11 @@ func listenToStream(ch chan StreamMsg) tea.Cmd {
 func (m Model) sendStreamMessageCmd(ch chan StreamMsg) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		err := m.client.StreamChat(ctx, m.cfg.CurrentModel, m.messages[:len(m.messages)-1], m.thinkSetting, func(content string, done bool, promptTokens, evalTokens int) error {
+		err := m.client.StreamChat(ctx, m.cfg.CurrentModel, m.messages[:len(m.messages)-1], m.thinkSetting, func(content string, done bool, metrics ollama.ResponseMetrics) error {
 			ch <- StreamMsg{
-				Content:      content,
-				Done:         done,
-				PromptTokens: promptTokens,
-				EvalTokens:   evalTokens,
+				Content: content,
+				Done:    done,
+				Metrics: metrics,
 			}
 			return nil
 		})
@@ -247,6 +249,16 @@ func (m Model) renderChatContent() string {
 		contentWidth := innerWidth - labelWidth - 1
 		if contentWidth < 10 {
 			contentWidth = 10
+		}
+
+		if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
+			metrics := m.messagesMetrics[i]
+			metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
+				formatTPS(metrics.TokensPerSecond),
+				formatDuration(metrics.TimeToFirstToken),
+				formatDuration(metrics.TotalDuration),
+			)
+			roleLabel += " " + metricsStyle.Render(metricsStr)
 		}
 
 		// Replace tabs with spaces to prevent terminal wrapping issues
@@ -400,6 +412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, m.fetchModelsCmd()
 						case "/new":
 							m.messages = nil
+							m.messagesMetrics = nil
 							m.inputTokens = 0
 							m.outputTokens = 0
 							m.err = nil
@@ -476,6 +489,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.fetchModelsCmd()
 				case "/new":
 					m.messages = nil
+					m.messagesMetrics = nil
 					m.inputTokens = 0
 					m.outputTokens = 0
 					m.err = nil
@@ -561,6 +575,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				userMsg := ollama.Message{Role: "user", Content: val}
 				m.messages = append(m.messages, userMsg)
+				m.messagesMetrics = append(m.messagesMetrics, nil)
 				m.textInput.Reset()
 				m.isResponding = true
 				m.err = nil
@@ -572,6 +587,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				if m.cfg.Stream {
 					m.messages = append(m.messages, ollama.Message{Role: "assistant", Content: ""})
+					m.messagesMetrics = append(m.messagesMetrics, nil)
 					ch := make(chan StreamMsg)
 					return m, tea.Batch(
 						m.sendStreamMessageCmd(ch),
@@ -605,8 +621,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			assistantMsg := ollama.Message{Role: "assistant", Content: msg.content}
 			m.messages = append(m.messages, assistantMsg)
-			m.inputTokens += msg.promptTokens
-			m.outputTokens += msg.evalTokens
+			m.messagesMetrics = append(m.messagesMetrics, &msg.metrics)
+			m.inputTokens += msg.metrics.PromptTokens
+			m.outputTokens += msg.metrics.EvalTokens
 		}
 
 		if m.ready {
@@ -622,6 +639,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Remove the empty assistant message if it has no content
 			if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" && m.messages[len(m.messages)-1].Content == "" {
 				m.messages = m.messages[:len(m.messages)-1]
+				m.messagesMetrics = m.messagesMetrics[:len(m.messagesMetrics)-1]
 			}
 			if m.ready {
 				m.viewport.SetContent(m.renderChatContent())
@@ -636,8 +654,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.Done {
 			m.isResponding = false
-			m.inputTokens += msg.PromptTokens
-			m.outputTokens += msg.EvalTokens
+			m.inputTokens += msg.Metrics.PromptTokens
+			m.outputTokens += msg.Metrics.EvalTokens
+			if len(m.messagesMetrics) > 0 {
+				m.messagesMetrics[len(m.messagesMetrics)-1] = &msg.Metrics
+			}
 			if m.ready {
 				m.viewport.SetContent(m.renderChatContent())
 				m.viewport.GotoBottom()
@@ -834,6 +855,20 @@ func (m Model) View() string {
 	}
 
 	return ""
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.2fs", d.Seconds())
+}
+
+func formatTPS(tps float64) string {
+	if tps <= 0 {
+		return "0.0 t/s"
+	}
+	return fmt.Sprintf("%.1f t/s", tps)
 }
 
 func renderHeader(width int, left string, right string) string {

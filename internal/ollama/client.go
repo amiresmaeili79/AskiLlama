@@ -12,6 +12,15 @@ import (
 // Re-export api.Message as Message to avoid ui depending directly on SDK types
 type Message = api.Message
 
+// ResponseMetrics holds the generation metrics for a chat response
+type ResponseMetrics struct {
+	TokensPerSecond  float64
+	TimeToFirstToken time.Duration
+	TotalDuration    time.Duration
+	PromptTokens     int
+	EvalTokens       int
+}
+
 // Client wraps the official Ollama Go SDK Client
 type Client struct {
 	sdkClient *api.Client
@@ -54,8 +63,8 @@ func (c *Client) ListModels() ([]string, error) {
 	return names, nil
 }
 
-// Chat sends a chat request to Ollama and returns the complete text response, prompt tokens, and eval tokens
-func (c *Client) Chat(model string, messages []Message, thinkSetting string) (string, int, int, error) {
+// Chat sends a chat request to Ollama and returns the complete text response and performance metrics
+func (c *Client) Chat(model string, messages []Message, thinkSetting string) (string, ResponseMetrics, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -76,25 +85,34 @@ func (c *Client) Chat(model string, messages []Message, thinkSetting string) (st
 		req.Think = &api.ThinkValue{Value: thinkSetting}
 	}
 
+	startTime := time.Now()
 	var responseText string
-	var promptTokens, evalTokens int
+	var metrics ResponseMetrics
 	err := c.sdkClient.Chat(ctx, req, func(resp api.ChatResponse) error {
 		responseText += resp.Message.Content
 		if resp.Done {
-			promptTokens = resp.PromptEvalCount
-			evalTokens = resp.EvalCount
+			metrics.TotalDuration = resp.TotalDuration
+			metrics.PromptTokens = resp.PromptEvalCount
+			metrics.EvalTokens = resp.EvalCount
+			metrics.TimeToFirstToken = resp.LoadDuration + resp.PromptEvalDuration
+			if metrics.TimeToFirstToken == 0 {
+				metrics.TimeToFirstToken = time.Since(startTime)
+			}
+			if resp.EvalDuration > 0 {
+				metrics.TokensPerSecond = float64(resp.EvalCount) / resp.EvalDuration.Seconds()
+			}
 		}
 		return nil
 	})
 	if err != nil {
-		return "", 0, 0, err
+		return "", ResponseMetrics{}, err
 	}
 
-	return responseText, promptTokens, evalTokens, nil
+	return responseText, metrics, nil
 }
 
 // StreamChat sends a chat request to Ollama and streams the response chunks back via a callback function.
-func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkSetting string, onChunk func(content string, done bool, promptTokens, evalTokens int) error) error {
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkSetting string, onChunk func(content string, done bool, metrics ResponseMetrics) error) error {
 	stream := true
 
 	req := &api.ChatRequest{
@@ -112,8 +130,31 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		req.Think = &api.ThinkValue{Value: thinkSetting}
 	}
 
+	startTime := time.Now()
+	var ttft time.Duration
+	var hasFirstToken bool
+
 	err := c.sdkClient.Chat(ctx, req, func(resp api.ChatResponse) error {
-		return onChunk(resp.Message.Content, resp.Done, resp.PromptEvalCount, resp.EvalCount)
+		if !hasFirstToken && resp.Message.Content != "" {
+			ttft = time.Since(startTime)
+			hasFirstToken = true
+		}
+
+		var metrics ResponseMetrics
+		if resp.Done {
+			metrics.TotalDuration = resp.TotalDuration
+			metrics.PromptTokens = resp.PromptEvalCount
+			metrics.EvalTokens = resp.EvalCount
+			metrics.TimeToFirstToken = ttft
+			if metrics.TimeToFirstToken == 0 {
+				metrics.TimeToFirstToken = resp.LoadDuration + resp.PromptEvalDuration
+			}
+			if resp.EvalDuration > 0 {
+				metrics.TokensPerSecond = float64(resp.EvalCount) / resp.EvalDuration.Seconds()
+			}
+		}
+
+		return onChunk(resp.Message.Content, resp.Done, metrics)
 	})
 	return err
 }
