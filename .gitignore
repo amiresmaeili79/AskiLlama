@@ -1,0 +1,25 @@
+# Binaries and executables
+askillama
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+*.out
+*.prof
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE configs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local configuration files
+config.yaml
