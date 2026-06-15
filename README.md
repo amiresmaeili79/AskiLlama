@@ -3,8 +3,6 @@
 A sleek, fast, and feature-rich Terminal User Interface (TUI) client for [Ollama](https://ollama.com/), built in Go using Bubble Tea and Lip Gloss. Chat with your local LLMs in style, directly from the command line.
 
 ![AskiLlama Main Interface](docs/assets/chat.png)
-*Placeholder: Main chat view with markdown response and performance metrics*
-
 ---
 
 ## Features
@@ -41,8 +39,6 @@ Simply execute the binary to start:
 If it is your first time running it or if no model is configured, you will be prompted to select from your locally downloaded Ollama models:
 
 ![Model Selection Screen](docs/assets/model.png)
-*Placeholder: Interactive model selection list*
-
 ---
 
 ## Hotkeys
@@ -62,8 +58,6 @@ Press `Ctrl+Y` to enter Copy Mode:
 3. Press `Esc` or `Ctrl+Y` to exit copy mode and resume typing.
 
 ![Copy Mode in Action](docs/assets/copy.png)
-*Placeholder: Message selection in copy mode*
-
 ---
 
 ## Slash Commands
