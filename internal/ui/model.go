@@ -36,6 +36,9 @@ var actions = []action{
 	{key: "/think", description: "set reasoning capability (false/true/low/medium/high/max)"},
 	{key: "/stream", description: "toggle stream mode (true/false)"},
 	{key: "/system", description: "set system prompt for current session"},
+	{key: "/save", description: "save current session: /save [session_name]"},
+	{key: "/load", description: "load a saved session: /load [session_name]"},
+	{key: "/export", description: "export chat to markdown: /export [file_name].md"},
 }
 
 type Model struct {
@@ -495,6 +498,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.viewport.Height = max(m.height-m.baseHeight(), 3)
 							}
 							return m, nil
+						case "/save":
+							m.textInput.SetValue("/save ")
+							m.textInput.SetCursor(len("/save "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						case "/load":
+							m.textInput.SetValue("/load ")
+							m.textInput.SetCursor(len("/load "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						case "/export":
+							m.textInput.SetValue("/export ")
+							m.textInput.SetCursor(len("/export "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
 						}
 					}
 				case "esc":
@@ -576,6 +603,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textInput.SetValue("/system ")
 					m.textInput.SetCursor(len("/system "))
 					return m, nil
+				case "/save":
+					m.textInput.SetValue("/save ")
+					m.textInput.SetCursor(len("/save "))
+					return m, nil
+				case "/load":
+					m.textInput.SetValue("/load ")
+					m.textInput.SetCursor(len("/load "))
+					return m, nil
+				case "/export":
+					m.textInput.SetValue("/export ")
+					m.textInput.SetCursor(len("/export "))
+					return m, nil
 				default:
 					if strings.HasPrefix(val, "/think ") {
 						setting := strings.TrimPrefix(val, "/think ")
@@ -648,6 +687,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.textInput.Reset()
 						m.popupCursor = 0
 						m.err = nil
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					if strings.HasPrefix(val, "/save ") {
+						name := strings.TrimSpace(strings.TrimPrefix(val, "/save "))
+						if err := m.saveSession(name); err != nil {
+							m.err = err
+						} else {
+							m.infoMessage = fmt.Sprintf("Session '%s' saved successfully!", name)
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					if strings.HasPrefix(val, "/load ") {
+						name := strings.TrimSpace(strings.TrimPrefix(val, "/load "))
+						if err := m.loadSession(name); err != nil {
+							m.err = err
+						} else {
+							m.infoMessage = fmt.Sprintf("Session '%s' loaded successfully!", name)
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					if strings.HasPrefix(val, "/export ") {
+						filename := strings.TrimSpace(strings.TrimPrefix(val, "/export "))
+						if err := m.exportChat(filename); err != nil {
+							m.err = err
+						} else {
+							if filename == "" {
+								filename = "askillama-chat.md"
+							} else if !strings.HasSuffix(strings.ToLower(filename), ".md") {
+								filename += ".md"
+							}
+							m.infoMessage = fmt.Sprintf("Chat exported to '%s' successfully!", filename)
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
 						if m.ready {
 							m.viewport.Height = max(m.height-m.baseHeight(), 3)
 							m.viewport.SetContent(m.renderChatContent())
