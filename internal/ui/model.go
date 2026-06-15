@@ -1038,10 +1038,8 @@ func (m Model) View() string {
 		if m.state == stateCopy {
 			inputBorderColor = "#50FA7B"
 		}
-		inputBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+		inputBox := inputContainerStyle.
 			BorderForeground(lipgloss.Color(inputBorderColor)).
-			Padding(0, 1).
 			Width(inputWidth - 2).
 			Render(m.textInput.View())
 
@@ -1226,12 +1224,6 @@ func (m *Model) scrollToSelectedMessage() {
 		}
 
 		roleLabel := labelStyle.Render(labelText)
-		labelWidth := lipgloss.Width(roleLabel)
-		contentWidth := innerWidth - labelWidth - 1
-		if contentWidth < 10 {
-			contentWidth = 10
-		}
-
 		if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
 			metrics := m.messagesMetrics[i]
 			metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
@@ -1242,15 +1234,29 @@ func (m *Model) scrollToSelectedMessage() {
 			roleLabel += " " + metricsStyle.Render(metricsStr)
 		}
 
+		if m.state == stateCopy {
+			if i == m.copyCursor {
+				roleLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render("-> ") + roleLabel
+			} else {
+				roleLabel = "   " + roleLabel
+			}
+		}
+
+		labelWidth := lipgloss.Width(roleLabel)
+		contentWidth := innerWidth - labelWidth - 1
+		if contentWidth < 10 {
+			contentWidth = 10
+		}
+
 		content := strings.ReplaceAll(msg.Content, "\t", "    ")
 		if msg.Role == "assistant" && m.thinkSetting == "false" {
 			content = stripReasoning(content)
 		}
 
 		wrappedContent := lipgloss.NewStyle().Width(contentWidth).Render(content)
-		
+
 		msgLines := 1 + strings.Count(wrappedContent, "\n")
-		
+
 		if i < m.copyCursor {
 			lineCountBefore += msgLines + 2 // 2 is for \n\n separating messages
 		} else if i == m.copyCursor {
