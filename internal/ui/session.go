@@ -114,8 +114,8 @@ func (m *Model) exportChat(filename string) error {
 
 	var sb strings.Builder
 	sb.WriteString("# AskiLlama Chat Export\n\n")
-	sb.WriteString(fmt.Sprintf("- **Date**: %s\n", time.Now().Format("2006-01-02 15:04:05")))
-	sb.WriteString(fmt.Sprintf("- **Model**: %s\n\n", m.cfg.CurrentModel))
+	fmt.Fprintf(&sb, "- **Date**: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&sb, "- **Model**: %s\n\n", m.cfg.CurrentModel)
 	sb.WriteString("---\n\n")
 
 	for i, msg := range m.messages {
@@ -137,11 +137,11 @@ func (m *Model) exportChat(filename string) error {
 			if i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
 				metrics := m.messagesMetrics[i]
 				sb.WriteString("<details>\n<summary>⚡ Performance Metrics</summary>\n\n")
-				sb.WriteString(fmt.Sprintf("- **Tokens Per Second**: %s\n", formatTPS(metrics.TokensPerSecond)))
-				sb.WriteString(fmt.Sprintf("- **Time To First Token**: %s\n", formatDuration(metrics.TimeToFirstToken)))
-				sb.WriteString(fmt.Sprintf("- **Total Generation Time**: %s\n", formatDuration(metrics.TotalDuration)))
-				sb.WriteString(fmt.Sprintf("- **Prompt Tokens**: %d\n", metrics.PromptTokens))
-				sb.WriteString(fmt.Sprintf("- **Eval Tokens**: %d\n", metrics.EvalTokens))
+				fmt.Fprintf(&sb, "- **Tokens Per Second**: %s\n", formatTPS(metrics.TokensPerSecond))
+				fmt.Fprintf(&sb, "- **Time To First Token**: %s\n", formatDuration(metrics.TimeToFirstToken))
+				fmt.Fprintf(&sb, "- **Total Generation Time**: %s\n", formatDuration(metrics.TotalDuration))
+				fmt.Fprintf(&sb, "- **Prompt Tokens**: %d\n", metrics.PromptTokens)
+				fmt.Fprintf(&sb, "- **Eval Tokens**: %d\n", metrics.EvalTokens)
 				sb.WriteString("</details>\n\n")
 			}
 		}
