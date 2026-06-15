@@ -4,9 +4,21 @@ on:
   push:
     branches:
       - master
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ci.yml'
+      - '.golangci.yml'
   pull_request:
     branches:
       - master
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/ci.yml'
+      - '.golangci.yml'
 
 jobs:
   lint:
