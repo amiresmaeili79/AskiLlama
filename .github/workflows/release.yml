@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & Release Assets
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Set build suffix and archive extension
+        id: vars
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            echo "suffix=.exe" >> $GITHUB_OUTPUT
+            echo "archive_ext=zip" >> $GITHUB_OUTPUT
+          else
+            echo "suffix=" >> $GITHUB_OUTPUT
+            echo "archive_ext=tar.gz" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -v -o askillama${{ steps.vars.outputs.suffix }} .
+
+      - name: Create Archive
+        id: archive
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          # Fallback in case tag_name is empty (e.g., manual trigger or test)
+          if [ -z "$TAG" ]; then
+            TAG="draft"
+          fi
+          
+          ARCHIVE_NAME="askillama-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}.${{ steps.vars.outputs.archive_ext }}"
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -r "${ARCHIVE_NAME}" askillama${{ steps.vars.outputs.suffix }} LICENSE
+          else
+            tar -czvf "${ARCHIVE_NAME}" askillama${{ steps.vars.outputs.suffix }} LICENSE
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.archive.outputs.archive_name }}
