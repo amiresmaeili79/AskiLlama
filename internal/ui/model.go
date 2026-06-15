@@ -33,6 +33,7 @@ var actions = []action{
 	{key: "/new", description: "new session"},
 	{key: "/think", description: "set reasoning capability (false/true/low/medium/high/max)"},
 	{key: "/stream", description: "toggle stream mode (true/false)"},
+	{key: "/system", description: "set system prompt for current session"},
 }
 
 type Model struct {
@@ -70,6 +71,12 @@ var (
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#888888")).
 			Italic(true)
+
+	systemLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#1A1A1A")).
+				Background(lipgloss.Color("#F1FA8C")).
+				Padding(0, 1)
 
 	userLabelStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -238,6 +245,10 @@ func (m Model) renderChatContent() string {
 			labelText = " You "
 			labelStyle = userLabelStyle
 			msgColor = lipgloss.Color("#FAFAFA")
+		} else if msg.Role == "system" {
+			labelText = " System Prompt "
+			labelStyle = systemLabelStyle
+			msgColor = lipgloss.Color("#F1FA8C")
 		} else {
 			labelText = " Ollama "
 			labelStyle = assistantLabelStyle
@@ -440,6 +451,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.viewport.Height = max(m.height-m.baseHeight(), 3)
 							}
 							return m, nil
+						case "/system":
+							m.textInput.SetValue("/system ")
+							m.textInput.SetCursor(len("/system "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
 						}
 					}
 				case "esc":
@@ -517,6 +536,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.viewport.GotoBottom()
 					}
 					return m, nil
+				case "/system":
+					m.textInput.SetValue("/system ")
+					m.textInput.SetCursor(len("/system "))
+					return m, nil
 				default:
 					if strings.HasPrefix(val, "/think ") {
 						setting := strings.TrimPrefix(val, "/think ")
@@ -570,6 +593,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.textInput.Reset()
 							return m, nil
 						}
+					}
+					if strings.HasPrefix(val, "/system ") {
+						prompt := strings.TrimSpace(strings.TrimPrefix(val, "/system "))
+						if prompt != "" {
+							if len(m.messages) > 0 && m.messages[0].Role == "system" {
+								m.messages[0].Content = prompt
+							} else {
+								m.messages = append([]ollama.Message{{Role: "system", Content: prompt}}, m.messages...)
+								m.messagesMetrics = append([]*ollama.ResponseMetrics{nil}, m.messagesMetrics...)
+							}
+						} else {
+							if len(m.messages) > 0 && m.messages[0].Role == "system" {
+								m.messages = m.messages[1:]
+								m.messagesMetrics = m.messagesMetrics[1:]
+							}
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						m.err = nil
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
 					}
 				}
 
