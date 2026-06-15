@@ -256,15 +256,16 @@ func (m *Model) renderChatContent() string {
 		var labelStyle lipgloss.Style
 		var msgColor lipgloss.Color
 
-		if msg.Role == "user" {
+		switch msg.Role {
+		case "user":
 			labelText = " You "
 			labelStyle = userLabelStyle
 			msgColor = lipgloss.Color("#FAFAFA")
-		} else if msg.Role == "system" {
+		case "system":
 			labelText = " System Prompt "
 			labelStyle = systemLabelStyle
 			msgColor = lipgloss.Color("#F1FA8C")
-		} else {
+		default:
 			labelText = " Ollama "
 			labelStyle = assistantLabelStyle
 			msgColor = lipgloss.Color("#DDDDDD")
@@ -1254,13 +1255,14 @@ func (m *Model) scrollToSelectedMessage() {
 		var labelText string
 		var labelStyle lipgloss.Style
 
-		if msg.Role == "user" {
+		switch msg.Role {
+		case "user":
 			labelText = " You "
 			labelStyle = userLabelStyle
-		} else if msg.Role == "system" {
+		case "system":
 			labelText = " System Prompt "
 			labelStyle = systemLabelStyle
-		} else {
+		default:
 			labelText = " Ollama "
 			labelStyle = assistantLabelStyle
 		}
