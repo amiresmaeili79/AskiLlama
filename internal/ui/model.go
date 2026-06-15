@@ -311,7 +311,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.ready {
 				m.viewport = viewport.New(vWidth, vHeight)
 				m.viewport.YPosition = 0
-				m.viewport.HighPerformanceRendering = false
 				m.viewport.SetContent(m.renderChatContent())
 				m.ready = true
 			} else {
@@ -443,16 +442,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Viewport scrolling controls
 			switch msg.String() {
 			case "pgup":
-				m.viewport.HalfViewUp()
+				m.viewport.HalfPageUp()
 				return m, nil
 			case "pgdown":
-				m.viewport.HalfViewDown()
+				m.viewport.HalfPageDown()
 				return m, nil
 			case "ctrl+up":
-				m.viewport.LineUp(1)
+				m.viewport.ScrollUp(1)
 				return m, nil
 			case "ctrl+down":
-				m.viewport.LineDown(1)
+				m.viewport.ScrollDown(1)
 				return m, nil
 			}
 
