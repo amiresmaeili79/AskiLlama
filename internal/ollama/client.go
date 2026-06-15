@@ -117,4 +117,3 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	})
 	return err
 }
-

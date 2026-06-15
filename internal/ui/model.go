@@ -54,7 +54,7 @@ type Model struct {
 	inputTokens  int
 	outputTokens int
 
-	popupCursor int
+	popupCursor  int
 	thinkSetting string
 }
 
