@@ -11,6 +11,7 @@ import (
 type Config struct {
 	HostURL      string `yaml:"host_url"`
 	CurrentModel string `yaml:"current_model"`
+	Stream       bool   `yaml:"stream"`
 	filePath     string
 }
 
@@ -44,6 +45,7 @@ func LoadConfig() (*Config, error) {
 		cfg := &Config{
 			HostURL:      "http://localhost:11434",
 			CurrentModel: "",
+			Stream:       true,
 			filePath:     globalPath,
 		}
 		if err := cfg.Save(); err != nil {
@@ -57,6 +59,7 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		HostURL:      "http://localhost:11434",
 		CurrentModel: "",
+		Stream:       true,
 		filePath:     localPath,
 	}
 	_ = cfg.Save()
@@ -69,6 +72,7 @@ func loadFromFile(path string) (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
+	cfg.Stream = true
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
