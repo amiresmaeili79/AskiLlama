@@ -1,5 +1,6 @@
 # Binaries and executables
 askillama
+main
 *.exe
 *.exe~
 *.dll
