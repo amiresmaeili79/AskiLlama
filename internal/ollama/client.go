@@ -28,7 +28,7 @@ func NewClient(baseURL string) *Client {
 	}
 
 	httpClient := &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 10 * time.Minute,
 	}
 
 	sdkClient := api.NewClient(parsedURL, httpClient)
@@ -39,7 +39,7 @@ func NewClient(baseURL string) *Client {
 
 // ListModels fetches the list of local model names from Ollama
 func (c *Client) ListModels() ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	resp, err := c.sdkClient.List(ctx)
@@ -54,9 +54,9 @@ func (c *Client) ListModels() ([]string, error) {
 	return names, nil
 }
 
-// Chat sends a chat request to Ollama and returns the complete text response (non-streaming)
-func (c *Client) Chat(model string, messages []Message) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+// Chat sends a chat request to Ollama and returns the complete text response, prompt tokens, and eval tokens
+func (c *Client) Chat(model string, messages []Message) (string, int, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	stream := false
@@ -67,13 +67,18 @@ func (c *Client) Chat(model string, messages []Message) (string, error) {
 	}
 
 	var responseText string
+	var promptTokens, evalTokens int
 	err := c.sdkClient.Chat(ctx, req, func(resp api.ChatResponse) error {
 		responseText += resp.Message.Content
+		if resp.Done {
+			promptTokens = resp.PromptEvalCount
+			evalTokens = resp.EvalCount
+		}
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
 
-	return responseText, nil
+	return responseText, promptTokens, evalTokens, nil
 }
