@@ -92,3 +92,29 @@ func (c *Client) Chat(model string, messages []Message, thinkSetting string) (st
 
 	return responseText, promptTokens, evalTokens, nil
 }
+
+// StreamChat sends a chat request to Ollama and streams the response chunks back via a callback function.
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkSetting string, onChunk func(content string, done bool, promptTokens, evalTokens int) error) error {
+	stream := true
+
+	req := &api.ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   &stream,
+	}
+
+	switch thinkSetting {
+	case "false":
+		req.Think = &api.ThinkValue{Value: false}
+	case "true":
+		req.Think = &api.ThinkValue{Value: true}
+	case "low", "medium", "high", "max":
+		req.Think = &api.ThinkValue{Value: thinkSetting}
+	}
+
+	err := c.sdkClient.Chat(ctx, req, func(resp api.ChatResponse) error {
+		return onChunk(resp.Message.Content, resp.Done, resp.PromptEvalCount, resp.EvalCount)
+	})
+	return err
+}
+

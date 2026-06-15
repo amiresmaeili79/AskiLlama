@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -30,6 +31,7 @@ var actions = []action{
 	{key: "/model", description: "change model"},
 	{key: "/new", description: "new session"},
 	{key: "/think", description: "set reasoning capability (false/true/low/medium/high/max)"},
+	{key: "/stream", description: "toggle stream mode (true/false)"},
 }
 
 type Model struct {
@@ -172,6 +174,46 @@ func (m Model) sendMessageCmd(prompt string) tea.Cmd {
 	}
 }
 
+type StreamMsg struct {
+	Content      string
+	PromptTokens int
+	EvalTokens   int
+	Done         bool
+	Err          error
+	Channel      chan StreamMsg
+}
+
+func listenToStream(ch chan StreamMsg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return StreamMsg{Done: true}
+		}
+		msg.Channel = ch
+		return msg
+	}
+}
+
+func (m Model) sendStreamMessageCmd(ch chan StreamMsg) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		err := m.client.StreamChat(ctx, m.cfg.CurrentModel, m.messages[:len(m.messages)-1], m.thinkSetting, func(content string, done bool, promptTokens, evalTokens int) error {
+			ch <- StreamMsg{
+				Content:      content,
+				Done:         done,
+				PromptTokens: promptTokens,
+				EvalTokens:   evalTokens,
+			}
+			return nil
+		})
+		if err != nil {
+			ch <- StreamMsg{Err: err}
+		}
+		close(ch)
+		return nil
+	}
+}
+
 func (m Model) renderChatContent() string {
 	var s strings.Builder
 
@@ -234,8 +276,14 @@ func (m Model) renderChatContent() string {
 	}
 
 	if m.isResponding {
-		s.WriteString("\n\n")
-		s.WriteString(systemMsgStyle.Render(" Ollama is typing..."))
+		hasAssistantContent := false
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" && m.messages[len(m.messages)-1].Content != "" {
+			hasAssistantContent = true
+		}
+		if !hasAssistantContent {
+			s.WriteString("\n\n")
+			s.WriteString(systemMsgStyle.Render(" Ollama is typing..."))
+		}
 	}
 
 	if m.err != nil {
@@ -372,6 +420,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								m.viewport.Height = max(m.height-m.baseHeight(), 3)
 							}
 							return m, nil
+						case "/stream":
+							m.textInput.SetValue("/stream ")
+							m.textInput.SetCursor(len("/stream "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
 						}
 					}
 				case "esc":
@@ -436,6 +492,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textInput.SetValue("/think ")
 					m.textInput.SetCursor(len("/think "))
 					return m, nil
+				case "/stream":
+					m.cfg.Stream = !m.cfg.Stream
+					_ = m.cfg.Save()
+					m.textInput.Reset()
+					m.popupCursor = 0
+					m.err = nil
+					if m.ready {
+						m.viewport.Height = max(m.height-m.baseHeight(), 3)
+						m.viewport.SetContent(m.renderChatContent())
+						m.viewport.GotoBottom()
+					}
+					return m, nil
 				default:
 					if strings.HasPrefix(val, "/think ") {
 						setting := strings.TrimPrefix(val, "/think ")
@@ -457,6 +525,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, nil
 						}
 					}
+					if strings.HasPrefix(val, "/stream ") {
+						setting := strings.TrimPrefix(val, "/stream ")
+						switch setting {
+						case "true", "yes", "on":
+							m.cfg.Stream = true
+							_ = m.cfg.Save()
+							m.textInput.Reset()
+							m.popupCursor = 0
+							m.err = nil
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+								m.viewport.SetContent(m.renderChatContent())
+								m.viewport.GotoBottom()
+							}
+							return m, nil
+						case "false", "no", "off":
+							m.cfg.Stream = false
+							_ = m.cfg.Save()
+							m.textInput.Reset()
+							m.popupCursor = 0
+							m.err = nil
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+								m.viewport.SetContent(m.renderChatContent())
+								m.viewport.GotoBottom()
+							}
+							return m, nil
+						default:
+							m.err = fmt.Errorf("invalid stream setting. Choose from: true, false")
+							m.textInput.Reset()
+							return m, nil
+						}
+					}
 				}
 
 				userMsg := ollama.Message{Role: "user", Content: val}
@@ -470,7 +571,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.viewport.GotoBottom()
 				}
 
-				return m, m.sendMessageCmd(val)
+				if m.cfg.Stream {
+					m.messages = append(m.messages, ollama.Message{Role: "assistant", Content: ""})
+					ch := make(chan StreamMsg)
+					return m, tea.Batch(
+						m.sendStreamMessageCmd(ch),
+						listenToStream(ch),
+					)
+				} else {
+					return m, m.sendMessageCmd(val)
+				}
 			}
 		}
 
@@ -505,6 +615,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 		}
 		return m, nil
+
+	case StreamMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.isResponding = false
+			// Remove the empty assistant message if it has no content
+			if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" && m.messages[len(m.messages)-1].Content == "" {
+				m.messages = m.messages[:len(m.messages)-1]
+			}
+			if m.ready {
+				m.viewport.SetContent(m.renderChatContent())
+				m.viewport.GotoBottom()
+			}
+			return m, nil
+		}
+
+		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" {
+			m.messages[len(m.messages)-1].Content += msg.Content
+		}
+
+		if msg.Done {
+			m.isResponding = false
+			m.inputTokens += msg.PromptTokens
+			m.outputTokens += msg.EvalTokens
+			if m.ready {
+				m.viewport.SetContent(m.renderChatContent())
+				m.viewport.GotoBottom()
+			}
+			return m, nil
+		}
+
+		if m.ready {
+			m.viewport.SetContent(m.renderChatContent())
+			m.viewport.GotoBottom()
+		}
+
+		return m, listenToStream(msg.Channel)
 
 	case tea.MouseMsg:
 		if m.state == stateChat && m.ready {
@@ -677,7 +824,11 @@ func (m Model) View() string {
 			Foreground(lipgloss.Color("#888888")).
 			Italic(true).
 			PaddingLeft(2)
-		helpText := helpTextStyle.Render("(write / for actions)")
+		modeStr := "⚡ stream"
+		if !m.cfg.Stream {
+			modeStr = "📦 batch"
+		}
+		helpText := helpTextStyle.Render(fmt.Sprintf("(write / for actions) • PgUp/PgDn: scroll page • Ctrl+Up/Down: scroll line • Mode: %s", modeStr))
 		views = append(views, helpText)
 
 		return lipgloss.JoinVertical(lipgloss.Left, views...)
