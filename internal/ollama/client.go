@@ -55,15 +55,25 @@ func (c *Client) ListModels() ([]string, error) {
 }
 
 // Chat sends a chat request to Ollama and returns the complete text response, prompt tokens, and eval tokens
-func (c *Client) Chat(model string, messages []Message) (string, int, int, error) {
+func (c *Client) Chat(model string, messages []Message, thinkSetting string) (string, int, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	stream := false
+
 	req := &api.ChatRequest{
 		Model:    model,
 		Messages: messages,
 		Stream:   &stream,
+	}
+
+	switch thinkSetting {
+	case "false":
+		req.Think = &api.ThinkValue{Value: false}
+	case "true":
+		req.Think = &api.ThinkValue{Value: true}
+	case "low", "medium", "high", "max":
+		req.Think = &api.ThinkValue{Value: thinkSetting}
 	}
 
 	var responseText string

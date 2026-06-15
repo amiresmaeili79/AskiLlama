@@ -21,6 +21,17 @@ const (
 	stateChat
 )
 
+type action struct {
+	key         string
+	description string
+}
+
+var actions = []action{
+	{key: "/model", description: "change model"},
+	{key: "/new", description: "new session"},
+	{key: "/think", description: "set reasoning capability (false/true/low/medium/high/max)"},
+}
+
 type Model struct {
 	cfg          *config.Config
 	client       *ollama.Client
@@ -40,6 +51,9 @@ type Model struct {
 
 	inputTokens  int
 	outputTokens int
+
+	popupCursor int
+	thinkSetting string
 }
 
 var (
@@ -89,6 +103,11 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#00ADD8")).
 				Padding(0, 1)
+
+	popupContainerStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#FF79C6")).
+				Padding(0, 1)
 )
 
 func NewModel(cfg *config.Config) Model {
@@ -105,10 +124,11 @@ func NewModel(cfg *config.Config) Model {
 	}
 
 	return Model{
-		cfg:       cfg,
-		client:    client,
-		textInput: ti,
-		state:     initialState,
+		cfg:          cfg,
+		client:       client,
+		textInput:    ti,
+		state:        initialState,
+		thinkSetting: "false",
 	}
 }
 
@@ -142,7 +162,7 @@ type responseMsg struct {
 
 func (m Model) sendMessageCmd(prompt string) tea.Cmd {
 	return func() tea.Msg {
-		resp, promptTokens, evalTokens, err := m.client.Chat(m.cfg.CurrentModel, m.messages)
+		resp, promptTokens, evalTokens, err := m.client.Chat(m.cfg.CurrentModel, m.messages, m.thinkSetting)
 		return responseMsg{
 			content:      resp,
 			promptTokens: promptTokens,
@@ -189,6 +209,9 @@ func (m Model) renderChatContent() string {
 
 		// Replace tabs with spaces to prevent terminal wrapping issues
 		content := strings.ReplaceAll(msg.Content, "\t", "    ")
+		if msg.Role == "assistant" && m.thinkSetting == "false" {
+			content = stripReasoning(content)
+		}
 
 		// Wrap content and color it
 		wrappedContent := lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
@@ -234,8 +257,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Only setup components if we meet minimum terminal size
 		if m.width >= 80 && m.height >= 18 {
-			// Title bar (1) + Spacing (1) + Viewport borders (2) + Input borders (2) + Input line (1) + Spacing (1) + 1 line safety buffer
-			vHeight := max(m.height-9, 3)
+			vHeight := max(m.height-m.baseHeight(), 3)
 			vWidth := m.width - 4
 
 			if !m.ready {
@@ -300,6 +322,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case stateChat:
+			// If popup is active, handle popup keys
+			if m.isPopupActive() {
+				matches := m.getMatchingActions()
+				switch msg.String() {
+				case "up", "ctrl+k":
+					if len(matches) > 0 {
+						m.popupCursor = (m.popupCursor - 1 + len(matches)) % len(matches)
+					}
+					return m, nil
+				case "down", "ctrl+j", "tab":
+					if len(matches) > 0 {
+						m.popupCursor = (m.popupCursor + 1) % len(matches)
+					}
+					return m, nil
+				case "enter":
+					if len(matches) > 0 {
+						selected := matches[m.popupCursor]
+						switch selected.key {
+						case "/model":
+							m.cfg.CurrentModel = ""
+							_ = m.cfg.Save()
+							m.state = stateLoadingModels
+							m.err = nil
+							m.textInput.Reset()
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, m.fetchModelsCmd()
+						case "/new":
+							m.messages = nil
+							m.inputTokens = 0
+							m.outputTokens = 0
+							m.err = nil
+							m.textInput.Reset()
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+								m.viewport.SetContent(m.renderChatContent())
+								m.viewport.GotoBottom()
+							}
+							return m, nil
+						case "/think":
+							m.textInput.SetValue("/think ")
+							m.textInput.SetCursor(len("/think "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						}
+					}
+				case "esc":
+					m.textInput.Reset()
+					m.popupCursor = 0
+					if m.ready {
+						m.viewport.Height = max(m.height-m.baseHeight(), 3)
+					}
+					return m, nil
+				}
+			}
+
 			// Viewport scrolling controls
 			switch msg.String() {
 			case "pgup":
@@ -317,19 +401,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			switch msg.Type {
-			case tea.KeyEsc:
-				// Go back to model selection
-				m.cfg.CurrentModel = ""
-				_ = m.cfg.Save()
-				m.state = stateLoadingModels
-				m.messages = nil
-				m.err = nil
-				return m, m.fetchModelsCmd()
-
 			case tea.KeyEnter:
 				val := m.textInput.Value()
 				if strings.TrimSpace(val) == "" {
 					return m, nil
+				}
+
+				switch val {
+				case "/model":
+					m.cfg.CurrentModel = ""
+					_ = m.cfg.Save()
+					m.state = stateLoadingModels
+					m.err = nil
+					m.textInput.Reset()
+					m.popupCursor = 0
+					if m.ready {
+						m.viewport.Height = max(m.height-m.baseHeight(), 3)
+					}
+					return m, m.fetchModelsCmd()
+				case "/new":
+					m.messages = nil
+					m.inputTokens = 0
+					m.outputTokens = 0
+					m.err = nil
+					m.textInput.Reset()
+					m.popupCursor = 0
+					if m.ready {
+						m.viewport.Height = max(m.height-m.baseHeight(), 3)
+						m.viewport.SetContent(m.renderChatContent())
+						m.viewport.GotoBottom()
+					}
+					return m, nil
+				case "/think":
+					m.textInput.SetValue("/think ")
+					m.textInput.SetCursor(len("/think "))
+					return m, nil
+				default:
+					if strings.HasPrefix(val, "/think ") {
+						setting := strings.TrimPrefix(val, "/think ")
+						switch setting {
+						case "false", "true", "low", "medium", "high", "max":
+							m.thinkSetting = setting
+							m.textInput.Reset()
+							m.popupCursor = 0
+							m.err = nil
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+								m.viewport.SetContent(m.renderChatContent())
+								m.viewport.GotoBottom()
+							}
+							return m, nil
+						default:
+							m.err = fmt.Errorf("invalid think setting. Choose from: false, true, low, medium, high, max")
+							m.textInput.Reset()
+							return m, nil
+						}
+					}
 				}
 
 				userMsg := ollama.Message{Role: "user", Content: val}
@@ -389,6 +516,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.state == stateChat {
 		m.textInput, cmd = m.textInput.Update(msg)
 		cmds = append(cmds, cmd)
+
+		// Clamp popupCursor to ensure it doesn't get out of bounds
+		if m.isPopupActive() {
+			matches := m.getMatchingActions()
+			if len(matches) > 0 && m.popupCursor >= len(matches) {
+				m.popupCursor = len(matches) - 1
+			}
+			if m.popupCursor < 0 {
+				m.popupCursor = 0
+			}
+		}
+
+		// Update viewport height dynamically if needed
+		if m.ready {
+			m.viewport.Height = max(m.height-m.baseHeight(), 3)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -501,17 +644,41 @@ func (m Model) View() string {
 			Render(m.textInput.View())
 
 		modelNameStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF79C6"))
+		modelDisplayName := m.cfg.CurrentModel
+		if m.thinkSetting != "false" {
+			if m.thinkSetting == "true" {
+				modelDisplayName = "💡 " + modelDisplayName
+			} else {
+				modelDisplayName = fmt.Sprintf("💡 (%s) %s", m.thinkSetting, modelDisplayName)
+			}
+		}
 		modelBox := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#7D56F4")).
 			Padding(0, 1).
 			Align(lipgloss.Center).
 			Width(modelBoxWidth - 2).
-			Render(modelNameStyle.Render(m.cfg.CurrentModel))
+			Render(modelNameStyle.Render(modelDisplayName))
 
 		bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, inputBox, modelBox)
 
-		views = append(views, header, "", viewportBox, bottomRow)
+		views = append(views, header, "", viewportBox)
+
+		if m.isPopupActive() {
+			popupBox := m.renderPopup()
+			if popupBox != "" {
+				views = append(views, popupBox)
+			}
+		}
+
+		views = append(views, bottomRow)
+
+		helpTextStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#888888")).
+			Italic(true).
+			PaddingLeft(2)
+		helpText := helpTextStyle.Render("(write / for actions)")
+		views = append(views, helpText)
 
 		return lipgloss.JoinVertical(lipgloss.Left, views...)
 	}
@@ -527,4 +694,83 @@ func renderHeader(width int, left string, right string) string {
 		spaces = 1
 	}
 	return left + strings.Repeat(" ", spaces) + right
+}
+
+func (m Model) isPopupActive() bool {
+	return m.state == stateChat && strings.HasPrefix(m.textInput.Value(), "/")
+}
+
+func (m Model) getMatchingActions() []action {
+	val := m.textInput.Value()
+	var matches []action
+	for _, act := range actions {
+		if strings.HasPrefix(act.key, val) {
+			matches = append(matches, act)
+		}
+	}
+	return matches
+}
+
+func (m Model) popupHeight() int {
+	matches := m.getMatchingActions()
+	if len(matches) == 0 {
+		return 0
+	}
+	return len(matches) + 2
+}
+
+func (m Model) baseHeight() int {
+	h := 10 // Header(1) + Spacing(1) + Viewport borders(2) + Input borders(2) + Input line(1) + Help text(1) + Spacing/Safety(2)
+	if m.isPopupActive() {
+		h += m.popupHeight()
+	}
+	return h
+}
+
+func (m Model) renderPopup() string {
+	matches := m.getMatchingActions()
+	if len(matches) == 0 {
+		return ""
+	}
+
+	var s strings.Builder
+	for i, act := range matches {
+		isSelected := (i == m.popupCursor)
+		var line string
+		if isSelected {
+			cursorSymbol := cursorStyle.Render("> ")
+			actionKey := selectedItemStyle.Render(act.key)
+			actionDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("#FAFAFA")).Italic(true).Render(" (" + act.description + ")")
+			line = fmt.Sprintf("%s%s%s", cursorSymbol, actionKey, actionDesc)
+		} else {
+			cursorSymbol := "  "
+			actionKey := unselectedItemStyle.Render(act.key)
+			actionDesc := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888")).Italic(true).Render(" (" + act.description + ")")
+			line = fmt.Sprintf("%s%s%s", cursorSymbol, actionKey, actionDesc)
+		}
+		s.WriteString(line)
+		if i < len(matches)-1 {
+			s.WriteString("\n")
+		}
+	}
+
+	return popupContainerStyle.
+		Width(m.viewport.Width).
+		Render(s.String())
+}
+
+func stripReasoning(content string) string {
+	for {
+		start := strings.Index(content, "<think>")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(content[start:], "</think>")
+		if end == -1 {
+			content = content[:start]
+			break
+		}
+		content = content[:start] + content[start+end+8:]
+	}
+	return strings.TrimSpace(content)
 }
