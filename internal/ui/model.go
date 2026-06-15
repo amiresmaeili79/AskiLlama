@@ -9,6 +9,7 @@ import (
 	"askillama/internal/config"
 	"askillama/internal/ollama"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,7 @@ const (
 	stateLoadingModels state = iota
 	stateSelectModel
 	stateChat
+	stateCopy
 )
 
 type action struct {
@@ -33,6 +35,10 @@ var actions = []action{
 	{key: "/new", description: "new session"},
 	{key: "/think", description: "set reasoning capability (false/true/low/medium/high/max)"},
 	{key: "/stream", description: "toggle stream mode (true/false)"},
+	{key: "/system", description: "set system prompt for current session"},
+	{key: "/save", description: "save current session: /save [session_name]"},
+	{key: "/load", description: "load a saved session: /load [session_name]"},
+	{key: "/export", description: "export chat to markdown: /export [file_name].md"},
 }
 
 type Model struct {
@@ -58,6 +64,9 @@ type Model struct {
 
 	popupCursor  int
 	thinkSetting string
+
+	copyCursor  int
+	infoMessage string
 }
 
 var (
@@ -70,6 +79,12 @@ var (
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#888888")).
 			Italic(true)
+
+	systemLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#1A1A1A")).
+				Background(lipgloss.Color("#F1FA8C")).
+				Padding(0, 1)
 
 	userLabelStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -238,6 +253,10 @@ func (m Model) renderChatContent() string {
 			labelText = " You "
 			labelStyle = userLabelStyle
 			msgColor = lipgloss.Color("#FAFAFA")
+		} else if msg.Role == "system" {
+			labelText = " System Prompt "
+			labelStyle = systemLabelStyle
+			msgColor = lipgloss.Color("#F1FA8C")
 		} else {
 			labelText = " Ollama "
 			labelStyle = assistantLabelStyle
@@ -245,12 +264,6 @@ func (m Model) renderChatContent() string {
 		}
 
 		roleLabel := labelStyle.Render(labelText)
-		labelWidth := lipgloss.Width(roleLabel)
-		contentWidth := innerWidth - labelWidth - 1
-		if contentWidth < 10 {
-			contentWidth = 10
-		}
-
 		if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
 			metrics := m.messagesMetrics[i]
 			metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
@@ -261,6 +274,20 @@ func (m Model) renderChatContent() string {
 			roleLabel += " " + metricsStyle.Render(metricsStr)
 		}
 
+		if m.state == stateCopy {
+			if i == m.copyCursor {
+				roleLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render("-> ") + roleLabel
+			} else {
+				roleLabel = "   " + roleLabel
+			}
+		}
+
+		labelWidth := lipgloss.Width(roleLabel)
+		contentWidth := innerWidth - labelWidth - 1
+		if contentWidth < 10 {
+			contentWidth = 10
+		}
+
 		// Replace tabs with spaces to prevent terminal wrapping issues
 		content := strings.ReplaceAll(msg.Content, "\t", "    ")
 		if msg.Role == "assistant" && m.thinkSetting == "false" {
@@ -269,18 +296,15 @@ func (m Model) renderChatContent() string {
 
 		// Wrap content and color it
 		wrappedContent := lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
-		lines := strings.Split(wrappedContent, "\n")
-
-		for idx, line := range lines {
-			if idx == 0 {
-				s.WriteString(roleLabel)
-				s.WriteString("\n")
-				s.WriteString(line)
-			} else {
-				s.WriteString("\n")
-				s.WriteString(line)
+		if m.state == stateCopy {
+			lines := strings.Split(wrappedContent, "\n")
+			for idx, line := range lines {
+				lines[idx] = "   " + line
 			}
+			wrappedContent = strings.Join(lines, "\n")
 		}
+		msgBlockStr := roleLabel + "\n" + wrappedContent
+		s.WriteString(msgBlockStr)
 
 		if i < len(m.messages)-1 {
 			s.WriteString("\n\n")
@@ -301,6 +325,9 @@ func (m Model) renderChatContent() string {
 	if m.err != nil {
 		s.WriteString("\n\n")
 		s.WriteString(errorStyle.Render(fmt.Sprintf(" Error: %v", m.err)))
+	} else if m.infoMessage != "" {
+		s.WriteString("\n\n")
+		s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render(fmt.Sprintf(" %s", m.infoMessage)))
 	}
 
 	return s.String()
@@ -331,6 +358,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(m.renderChatContent())
 			}
 
+			if m.state == stateCopy {
+				m.scrollToSelectedMessage()
+			}
+
 			// Adjust textinput width based on the left side allocation
 			modelBoxWidth := 24
 			inputWidth := vWidth + 2 - modelBoxWidth
@@ -338,6 +369,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.state == stateChat {
+			m.infoMessage = ""
+			m.err = nil
+		}
 		// Global shortcut to quit
 		if msg.Type == tea.KeyCtrlC {
 			return m, tea.Quit
@@ -381,6 +416,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case stateChat:
+			if msg.String() == "ctrl+y" {
+				if len(m.messages) > 0 {
+					m.state = stateCopy
+					m.copyCursor = len(m.messages) - 1
+					m.textInput.Blur()
+					m.scrollToSelectedMessage()
+					if m.ready {
+						m.viewport.SetContent(m.renderChatContent())
+					}
+				} else {
+					m.err = fmt.Errorf("no messages to copy")
+				}
+				return m, nil
+			}
+
 			// If popup is active, handle popup keys
 			if m.isPopupActive() {
 				matches := m.getMatchingActions()
@@ -435,6 +485,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						case "/stream":
 							m.textInput.SetValue("/stream ")
 							m.textInput.SetCursor(len("/stream "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						case "/system":
+							m.textInput.SetValue("/system ")
+							m.textInput.SetCursor(len("/system "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						case "/save":
+							m.textInput.SetValue("/save ")
+							m.textInput.SetCursor(len("/save "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						case "/load":
+							m.textInput.SetValue("/load ")
+							m.textInput.SetCursor(len("/load "))
+							m.popupCursor = 0
+							if m.ready {
+								m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							}
+							return m, nil
+						case "/export":
+							m.textInput.SetValue("/export ")
+							m.textInput.SetCursor(len("/export "))
 							m.popupCursor = 0
 							if m.ready {
 								m.viewport.Height = max(m.height-m.baseHeight(), 3)
@@ -517,6 +599,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.viewport.GotoBottom()
 					}
 					return m, nil
+				case "/system":
+					m.textInput.SetValue("/system ")
+					m.textInput.SetCursor(len("/system "))
+					return m, nil
+				case "/save":
+					m.textInput.SetValue("/save ")
+					m.textInput.SetCursor(len("/save "))
+					return m, nil
+				case "/load":
+					m.textInput.SetValue("/load ")
+					m.textInput.SetCursor(len("/load "))
+					return m, nil
+				case "/export":
+					m.textInput.SetValue("/export ")
+					m.textInput.SetCursor(len("/export "))
+					return m, nil
 				default:
 					if strings.HasPrefix(val, "/think ") {
 						setting := strings.TrimPrefix(val, "/think ")
@@ -571,6 +669,84 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, nil
 						}
 					}
+					if strings.HasPrefix(val, "/system ") {
+						prompt := strings.TrimSpace(strings.TrimPrefix(val, "/system "))
+						if prompt != "" {
+							if len(m.messages) > 0 && m.messages[0].Role == "system" {
+								m.messages[0].Content = prompt
+							} else {
+								m.messages = append([]ollama.Message{{Role: "system", Content: prompt}}, m.messages...)
+								m.messagesMetrics = append([]*ollama.ResponseMetrics{nil}, m.messagesMetrics...)
+							}
+						} else {
+							if len(m.messages) > 0 && m.messages[0].Role == "system" {
+								m.messages = m.messages[1:]
+								m.messagesMetrics = m.messagesMetrics[1:]
+							}
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						m.err = nil
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					if strings.HasPrefix(val, "/save ") {
+						name := strings.TrimSpace(strings.TrimPrefix(val, "/save "))
+						if err := m.saveSession(name); err != nil {
+							m.err = err
+						} else {
+							m.infoMessage = fmt.Sprintf("Session '%s' saved successfully!", name)
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					if strings.HasPrefix(val, "/load ") {
+						name := strings.TrimSpace(strings.TrimPrefix(val, "/load "))
+						if err := m.loadSession(name); err != nil {
+							m.err = err
+						} else {
+							m.infoMessage = fmt.Sprintf("Session '%s' loaded successfully!", name)
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
+					if strings.HasPrefix(val, "/export ") {
+						filename := strings.TrimSpace(strings.TrimPrefix(val, "/export "))
+						if err := m.exportChat(filename); err != nil {
+							m.err = err
+						} else {
+							if filename == "" {
+								filename = "askillama-chat.md"
+							} else if !strings.HasSuffix(strings.ToLower(filename), ".md") {
+								filename += ".md"
+							}
+							m.infoMessage = fmt.Sprintf("Chat exported to '%s' successfully!", filename)
+						}
+						m.textInput.Reset()
+						m.popupCursor = 0
+						if m.ready {
+							m.viewport.Height = max(m.height-m.baseHeight(), 3)
+							m.viewport.SetContent(m.renderChatContent())
+							m.viewport.GotoBottom()
+						}
+						return m, nil
+					}
 				}
 
 				userMsg := ollama.Message{Role: "user", Content: val}
@@ -597,6 +773,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.sendMessageCmd(val)
 				}
 			}
+
+		case stateCopy:
+			switch msg.String() {
+			case "up", "k":
+				if m.copyCursor > 0 {
+					m.copyCursor--
+					m.scrollToSelectedMessage()
+					if m.ready {
+						m.viewport.SetContent(m.renderChatContent())
+					}
+				}
+				return m, nil
+			case "down", "j":
+				if m.copyCursor < len(m.messages)-1 {
+					m.copyCursor++
+					m.scrollToSelectedMessage()
+					if m.ready {
+						m.viewport.SetContent(m.renderChatContent())
+					}
+				}
+				return m, nil
+			case "enter":
+				if len(m.messages) > 0 && m.copyCursor >= 0 && m.copyCursor < len(m.messages) {
+					selectedMsg := m.messages[m.copyCursor].Content
+					err := clipboard.WriteAll(selectedMsg)
+					if err != nil {
+						m.err = fmt.Errorf("failed to copy: %v", err)
+					} else {
+						m.infoMessage = "Copied message to clipboard!"
+					}
+					m.state = stateChat
+					m.textInput.Focus()
+					if m.ready {
+						m.viewport.SetContent(m.renderChatContent())
+						m.viewport.GotoBottom()
+					}
+				}
+				return m, nil
+			case "esc", "ctrl+y":
+				m.state = stateChat
+				m.textInput.Focus()
+				if m.ready {
+					m.viewport.SetContent(m.renderChatContent())
+					m.viewport.GotoBottom()
+				}
+				return m, nil
+			}
+			return m, nil
 		}
 
 	case modelsFetchedMsg:
@@ -780,7 +1004,7 @@ func (m Model) View() string {
 				Render(modelSelectBox.String()),
 		)
 
-	case stateChat:
+	case stateChat, stateCopy:
 		if !m.ready {
 			return "Initializing layout..."
 		}
@@ -789,10 +1013,14 @@ func (m Model) View() string {
 
 		// 1. Header Left & Right
 		headerLeft := titleStyle.Render(" AskiLlama ")
+		modeStr := "⚡ stream"
+		if !m.cfg.Stream {
+			modeStr = "📦 batch"
+		}
 		headerRight := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#FAFAFA")).
-			Render(fmt.Sprintf("📥 %d | 📤 %d", m.inputTokens, m.outputTokens))
+			Render(fmt.Sprintf("%s | 📥 %d | 📤 %d", modeStr, m.inputTokens, m.outputTokens))
 
 		header := renderHeader(m.width, headerLeft, headerRight)
 
@@ -806,7 +1034,12 @@ func (m Model) View() string {
 		modelBoxWidth := 24
 		inputWidth := m.viewport.Width + 2 - modelBoxWidth
 
+		inputBorderColor := "#00ADD8"
+		if m.state == stateCopy {
+			inputBorderColor = "#50FA7B"
+		}
 		inputBox := inputContainerStyle.
+			BorderForeground(lipgloss.Color(inputBorderColor)).
 			Width(inputWidth - 2).
 			Render(m.textInput.View())
 
@@ -843,12 +1076,14 @@ func (m Model) View() string {
 		helpTextStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#888888")).
 			Italic(true).
-			PaddingLeft(2)
-		modeStr := "⚡ stream"
-		if !m.cfg.Stream {
-			modeStr = "📦 batch"
+			PaddingLeft(2).
+			Width(m.width - 4)
+		var helpText string
+		if m.state == stateCopy {
+			helpText = helpTextStyle.Render("Copy Mode: Up/Down or j/k to select • Enter to copy • Esc / Ctrl+Y to exit")
+		} else {
+			helpText = helpTextStyle.Render("(write / for actions) • Ctrl+Y: copy mode • PgUp/PgDn: scroll page • Ctrl+Up/Down: scroll line")
 		}
-		helpText := helpTextStyle.Render(fmt.Sprintf("(write / for actions) • PgUp/PgDn: scroll page • Ctrl+Up/Down: scroll line • Mode: %s", modeStr))
 		views = append(views, helpText)
 
 		return lipgloss.JoinVertical(lipgloss.Left, views...)
@@ -958,4 +1193,88 @@ func stripReasoning(content string) string {
 		content = content[:start] + content[start+end+8:]
 	}
 	return strings.TrimSpace(content)
+}
+
+func (m *Model) scrollToSelectedMessage() {
+	if len(m.messages) == 0 || m.copyCursor < 0 || m.copyCursor >= len(m.messages) {
+		return
+	}
+
+	innerWidth := m.viewport.Width - 2
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
+	lineCountBefore := 0
+	selectedMessageLines := 0
+
+	for i, msg := range m.messages {
+		var labelText string
+		var labelStyle lipgloss.Style
+
+		if msg.Role == "user" {
+			labelText = " You "
+			labelStyle = userLabelStyle
+		} else if msg.Role == "system" {
+			labelText = " System Prompt "
+			labelStyle = systemLabelStyle
+		} else {
+			labelText = " Ollama "
+			labelStyle = assistantLabelStyle
+		}
+
+		roleLabel := labelStyle.Render(labelText)
+		if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
+			metrics := m.messagesMetrics[i]
+			metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
+				formatTPS(metrics.TokensPerSecond),
+				formatDuration(metrics.TimeToFirstToken),
+				formatDuration(metrics.TotalDuration),
+			)
+			roleLabel += " " + metricsStyle.Render(metricsStr)
+		}
+
+		if m.state == stateCopy {
+			if i == m.copyCursor {
+				roleLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render("-> ") + roleLabel
+			} else {
+				roleLabel = "   " + roleLabel
+			}
+		}
+
+		labelWidth := lipgloss.Width(roleLabel)
+		contentWidth := innerWidth - labelWidth - 1
+		if contentWidth < 10 {
+			contentWidth = 10
+		}
+
+		content := strings.ReplaceAll(msg.Content, "\t", "    ")
+		if msg.Role == "assistant" && m.thinkSetting == "false" {
+			content = stripReasoning(content)
+		}
+
+		wrappedContent := lipgloss.NewStyle().Width(contentWidth).Render(content)
+
+		msgLines := 1 + strings.Count(wrappedContent, "\n")
+
+		if i < m.copyCursor {
+			lineCountBefore += msgLines + 2 // 2 is for \n\n separating messages
+		} else if i == m.copyCursor {
+			selectedMessageLines = msgLines
+			break
+		}
+	}
+
+	viewportTop := m.viewport.YOffset
+	viewportBottom := m.viewport.YOffset + m.viewport.Height
+
+	if lineCountBefore < viewportTop {
+		m.viewport.YOffset = lineCountBefore
+	} else if lineCountBefore+selectedMessageLines > viewportBottom {
+		m.viewport.YOffset = lineCountBefore + selectedMessageLines - m.viewport.Height
+	}
+
+	if m.viewport.YOffset < 0 {
+		m.viewport.YOffset = 0
+	}
 }
