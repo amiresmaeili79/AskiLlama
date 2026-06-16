@@ -291,6 +291,10 @@ func (m *Model) renderMessage(i int, innerWidth int) string {
 
 	var body string
 	if msg.Role == "assistant" {
+		// Ensure the render cache is initialized before indexing into it
+		if len(m.renderedMessages) != len(m.messages) {
+			m.renderedMessages = make([]string, len(m.messages))
+		}
 		// Use cached render when available; stream live for the last in-progress message
 		isStreaming := m.isResponding && i == len(m.messages)-1
 		if !isStreaming && m.renderedMessages[i] != "" {
@@ -1305,94 +1309,16 @@ func (m *Model) scrollToSelectedMessage() {
 		return
 	}
 
-	innerWidth := m.viewport.Width
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
+	innerWidth := max(m.viewport.Width, 10)
 
+	// Count the lines rendered before the selected message
 	lineCountBefore := 0
-	selectedMessageLines := 0
-
-	for i, msg := range m.messages {
-		var labelText string
-		var labelStyle lipgloss.Style
-
-		switch msg.Role {
-		case "user":
-			labelText = " You "
-			labelStyle = userLabelStyle
-		case "system":
-			labelText = " System Prompt "
-			labelStyle = systemLabelStyle
-		default:
-			labelText = " Ollama "
-			labelStyle = assistantLabelStyle
-		}
-
-		roleLabel := labelStyle.Render(labelText)
-		if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
-			metrics := m.messagesMetrics[i]
-			metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
-				formatTPS(metrics.TokensPerSecond),
-				formatDuration(metrics.TimeToFirstToken),
-				formatDuration(metrics.TotalDuration),
-			)
-			roleLabel += " " + metricsStyle.Render(metricsStr)
-		}
-
-		if m.state == stateCopy {
-			if i == m.copyCursor {
-				roleLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render("-> ") + roleLabel
-			} else {
-				roleLabel = "   " + roleLabel
-			}
-		}
-
-		labelWidth := lipgloss.Width(roleLabel)
-		contentWidth := innerWidth - labelWidth - 1
-		if contentWidth < 10 {
-			contentWidth = 10
-		}
-
-		content := strings.ReplaceAll(msg.Content, "\t", "    ")
-		if msg.Role == "assistant" && m.thinkSetting == "false" {
-			content = stripReasoning(content)
-		}
-
-		var wrappedContent string
-		if msg.Role == "assistant" {
-			if len(m.renderedMessages) != len(m.messages) {
-				m.renderedMessages = make([]string, len(m.messages))
-			}
-			isStreaming := m.isResponding && i == len(m.messages)-1
-			if !isStreaming && m.renderedMessages[i] != "" {
-				wrappedContent = m.renderedMessages[i]
-			} else {
-				renderer, err := glamour.NewTermRenderer(
-					glamour.WithStandardStyle("dark"),
-					glamour.WithWordWrap(contentWidth),
-				)
-				if err == nil {
-					if rendered, err := renderer.Render(content); err == nil {
-						wrappedContent = strings.TrimRight(rendered, "\n")
-						if !isStreaming {
-							m.renderedMessages[i] = wrappedContent
-						}
-					}
-				}
-			}
-		}
-
-		if wrappedContent == "" {
-			wrappedContent = lipgloss.NewStyle().Width(contentWidth).Render(content)
-		}
-
-		msgLines := 1 + strings.Count(wrappedContent, "\n")
-
+	for i := range m.messages {
+		rendered := m.renderMessage(i, innerWidth)
+		msgLines := strings.Count(rendered, "\n") + 1
 		if i < m.copyCursor {
-			lineCountBefore += msgLines + 2 // 2 is for \n\n separating messages
-		} else if i == m.copyCursor {
-			selectedMessageLines = msgLines
+			lineCountBefore += msgLines + 2 // +2 for the \n\n message separator
+		} else {
 			break
 		}
 	}
@@ -1400,10 +1326,12 @@ func (m *Model) scrollToSelectedMessage() {
 	viewportTop := m.viewport.YOffset
 	viewportBottom := m.viewport.YOffset + m.viewport.Height
 
+	// Scroll up if the message start is above the viewport
 	if lineCountBefore < viewportTop {
 		m.viewport.YOffset = lineCountBefore
-	} else if lineCountBefore+selectedMessageLines > viewportBottom {
-		m.viewport.YOffset = lineCountBefore + selectedMessageLines - m.viewport.Height
+		// Scroll down only enough to reveal the top of the message (where the arrow is)
+	} else if lineCountBefore >= viewportBottom {
+		m.viewport.YOffset = lineCountBefore
 	}
 
 	if m.viewport.YOffset < 0 {
