@@ -233,124 +233,142 @@ func (m Model) sendStreamMessageCmd(ch chan StreamMsg) tea.Cmd {
 	}
 }
 
-func (m *Model) renderChatContent() string {
-	var s strings.Builder
+// renderMessage renders a single chat message (label + content) into a string.
+func (m *Model) renderMessage(i int, innerWidth int) string {
+	msg := m.messages[i]
 
+	// --- Role label ---
+	var labelText string
+	var labelStyle lipgloss.Style
+	var msgColor lipgloss.Color
+
+	switch msg.Role {
+	case "user":
+		labelText = " You "
+		labelStyle = userLabelStyle
+		msgColor = lipgloss.Color("#FAFAFA")
+	case "system":
+		labelText = " System Prompt "
+		labelStyle = systemLabelStyle
+		msgColor = lipgloss.Color("#F1FA8C")
+	default: // "assistant"
+		labelText = " Ollama "
+		labelStyle = assistantLabelStyle
+		msgColor = lipgloss.Color("#DDDDDD")
+	}
+
+	roleLabel := labelStyle.Render(labelText)
+
+	// Append performance metrics next to the assistant label
+	if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
+		met := m.messagesMetrics[i]
+		metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
+			formatTPS(met.TokensPerSecond),
+			formatDuration(met.TimeToFirstToken),
+			formatDuration(met.TotalDuration),
+		)
+		roleLabel += " " + metricsStyle.Render(metricsStr)
+	}
+
+	// Prefix the label with a copy-mode cursor indicator
+	if m.state == stateCopy {
+		if i == m.copyCursor {
+			copyArrow := lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render("-> ")
+			roleLabel = copyArrow + roleLabel
+		} else {
+			roleLabel = "   " + roleLabel
+		}
+	}
+
+	// --- Content ---
+	contentWidth := max(innerWidth-lipgloss.Width(roleLabel)-1, 10)
+
+	// Normalize tabs to spaces to prevent terminal wrapping issues
+	content := strings.ReplaceAll(msg.Content, "\t", "    ")
+	if msg.Role == "assistant" && m.thinkSetting == "false" {
+		content = stripReasoning(content)
+	}
+
+	var body string
+	if msg.Role == "assistant" {
+		// Use cached render when available; stream live for the last in-progress message
+		isStreaming := m.isResponding && i == len(m.messages)-1
+		if !isStreaming && m.renderedMessages[i] != "" {
+			body = m.renderedMessages[i]
+		} else {
+			renderer, err := glamour.NewTermRenderer(
+				glamour.WithStandardStyle("dark"),
+				glamour.WithWordWrap(contentWidth),
+			)
+			if err == nil {
+				if rendered, err := renderer.Render(content); err == nil {
+					body = strings.TrimRight(rendered, "\n")
+					if !isStreaming {
+						m.renderedMessages[i] = body
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: plain styled text for user/system or when glamour fails
+	if body == "" {
+		body = lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
+	}
+
+	// Indent user messages and add a blank line after the label
+	if msg.Role == "user" {
+		body = indentLines(body, "  ")
+	}
+
+	// In copy-mode, indent all content to align with the cursor arrow
+	if m.state == stateCopy {
+		body = indentLines(body, "   ")
+	}
+
+	// User messages get a blank line between label and content
+	labelSep := "\n"
+	if msg.Role == "user" {
+		labelSep = "\n\n"
+	}
+
+	return roleLabel + labelSep + body
+}
+
+// indentLines prepends prefix to every line in s.
+func indentLines(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderChatContent() string {
 	if len(m.messages) == 0 {
 		return systemMsgStyle.Render(" No messages yet. Start a conversation by typing below!")
 	}
 
 	// Inner width accounts for viewport padding/borders
-	innerWidth := m.viewport.Width - 2
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
+	innerWidth := max(m.viewport.Width-2, 10)
 
-	// Ensure cache is initialized and matches the size of messages
+	// Ensure the render cache matches the current message count
 	if len(m.renderedMessages) != len(m.messages) {
 		m.renderedMessages = make([]string, len(m.messages))
 	}
 
-	for i, msg := range m.messages {
-		var labelText string
-		var labelStyle lipgloss.Style
-		var msgColor lipgloss.Color
-
-		switch msg.Role {
-		case "user":
-			labelText = " You "
-			labelStyle = userLabelStyle
-			msgColor = lipgloss.Color("#FAFAFA")
-		case "system":
-			labelText = " System Prompt "
-			labelStyle = systemLabelStyle
-			msgColor = lipgloss.Color("#F1FA8C")
-		default:
-			labelText = " Ollama "
-			labelStyle = assistantLabelStyle
-			msgColor = lipgloss.Color("#DDDDDD")
-		}
-
-		roleLabel := labelStyle.Render(labelText)
-		if msg.Role == "assistant" && i < len(m.messagesMetrics) && m.messagesMetrics[i] != nil {
-			metrics := m.messagesMetrics[i]
-			metricsStr := fmt.Sprintf(" [ %s | TTFT: %s | Total: %s ]",
-				formatTPS(metrics.TokensPerSecond),
-				formatDuration(metrics.TimeToFirstToken),
-				formatDuration(metrics.TotalDuration),
-			)
-			roleLabel += " " + metricsStyle.Render(metricsStr)
-		}
-
-		if m.state == stateCopy {
-			if i == m.copyCursor {
-				roleLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true).Render("-> ") + roleLabel
-			} else {
-				roleLabel = "   " + roleLabel
-			}
-		}
-
-		labelWidth := lipgloss.Width(roleLabel)
-		contentWidth := innerWidth - labelWidth - 1
-		if contentWidth < 10 {
-			contentWidth = 10
-		}
-
-		// Replace tabs with spaces to prevent terminal wrapping issues
-		content := strings.ReplaceAll(msg.Content, "\t", "    ")
-		if msg.Role == "assistant" && m.thinkSetting == "false" {
-			content = stripReasoning(content)
-		}
-
-		// Wrap content and color it
-		var wrappedContent string
-		if msg.Role == "assistant" {
-			// If it is the last message and we are currently responding/streaming,
-			// render dynamically without using/saving cache.
-			isStreaming := m.isResponding && i == len(m.messages)-1
-			if !isStreaming && m.renderedMessages[i] != "" {
-				wrappedContent = m.renderedMessages[i]
-			} else {
-				renderer, err := glamour.NewTermRenderer(
-					glamour.WithStandardStyle("dark"),
-					glamour.WithWordWrap(contentWidth),
-				)
-				if err == nil {
-					if rendered, err := renderer.Render(content); err == nil {
-						wrappedContent = strings.TrimRight(rendered, "\n")
-						if !isStreaming {
-							m.renderedMessages[i] = wrappedContent
-						}
-					}
-				}
-			}
-		}
-
-		if wrappedContent == "" {
-			wrappedContent = lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
-		}
-
-		if m.state == stateCopy {
-			lines := strings.Split(wrappedContent, "\n")
-			for idx, line := range lines {
-				lines[idx] = "   " + line
-			}
-			wrappedContent = strings.Join(lines, "\n")
-		}
-		msgBlockStr := roleLabel + "\n" + wrappedContent
-		s.WriteString(msgBlockStr)
-
-		if i < len(m.messages)-1 {
+	var s strings.Builder
+	for i := range m.messages {
+		if i > 0 {
 			s.WriteString("\n\n")
 		}
+		s.WriteString(m.renderMessage(i, innerWidth))
 	}
 
+	// Show a typing indicator when the assistant hasn't produced output yet
 	if m.isResponding {
-		hasAssistantContent := false
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" && m.messages[len(m.messages)-1].Content != "" {
-			hasAssistantContent = true
-		}
-		if !hasAssistantContent {
+		lastMsg := m.messages[len(m.messages)-1]
+		if lastMsg.Role != "assistant" || lastMsg.Content == "" {
 			s.WriteString("\n\n")
 			s.WriteString(systemMsgStyle.Render(" Ollama is typing..."))
 		}
@@ -398,8 +416,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Adjust textinput width based on the left side allocation
-			modelBoxWidth := 24
-			inputWidth := vWidth + 8 - modelBoxWidth
+			thinkBoxWidth := 10
+			inputWidth := vWidth + 8 - thinkBoxWidth
 			m.textInput.Width = inputWidth - 6
 		}
 
@@ -1054,7 +1072,7 @@ func (m Model) View() string {
 
 		var views []string
 
-		// 1. Header Left & Right
+		// 1. Header: title on left, model name centered, stats on right
 		headerLeft := titleStyle.Render(" AskiLlama ")
 		modeStr := "⚡ stream"
 		if !m.cfg.Stream {
@@ -1064,18 +1082,22 @@ func (m Model) View() string {
 			Bold(true).
 			Foreground(lipgloss.Color("#FAFAFA")).
 			Render(fmt.Sprintf("%s | 📥 %d | 📤 %d", modeStr, m.inputTokens, m.outputTokens))
+		headerCenter := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FF79C6")).
+			Render(m.cfg.CurrentModel)
 
-		header := renderHeader(m.width, headerLeft, headerRight)
+		header := renderHeader(m.width, headerLeft, headerCenter, headerRight)
 
 		// 2. Viewport container (with border)
 		viewportBox := viewportContainerStyle.
-			Width(m.viewport.Width + 4).
+			Width(m.viewport.Width + 6).
 			Height(m.viewport.Height + 2).
 			Render(m.viewport.View())
 
-		// 3. Side-by-side Input container & Model box
-		modelBoxWidth := 24
-		inputWidth := m.viewport.Width + 8 - modelBoxWidth
+		// 3. Side-by-side Input container & compact Think-mode box
+		thinkBoxWidth := 10
+		inputWidth := m.viewport.Width + 8 - thinkBoxWidth
 
 		inputBorderColor := "#00ADD8"
 		if m.state == stateCopy {
@@ -1086,24 +1108,15 @@ func (m Model) View() string {
 			Width(inputWidth - 2).
 			Render(m.textInput.View())
 
-		modelNameStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF79C6"))
-		modelDisplayName := m.cfg.CurrentModel
-		if m.thinkSetting != "false" {
-			if m.thinkSetting == "true" {
-				modelDisplayName = "💡 " + modelDisplayName
-			} else {
-				modelDisplayName = fmt.Sprintf("💡 (%s) %s", m.thinkSetting, modelDisplayName)
-			}
-		}
-		modelBox := lipgloss.NewStyle().
+		thinkBox := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#7D56F4")).
 			Padding(0, 1).
 			Align(lipgloss.Center).
-			Width(modelBoxWidth - 2).
-			Render(modelNameStyle.Render(modelDisplayName))
+			Width(thinkBoxWidth - 2).
+			Render(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF79C6")).Render(thinkModeCompact(m.thinkSetting)))
 
-		bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, inputBox, modelBox)
+		bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, inputBox, thinkBox)
 
 		views = append(views, header, "", viewportBox)
 
@@ -1119,13 +1132,14 @@ func (m Model) View() string {
 		helpTextStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#888888")).
 			Italic(true).
-			PaddingLeft(2).
-			Width(m.width - 4)
+			PaddingLeft(2)
+		// maxHelpWidth: 2 chars left-padding already added by style, so clip to (m.width - 2)
+		maxHelpWidth := m.width - 2
 		var helpText string
 		if m.state == stateCopy {
-			helpText = helpTextStyle.Render("Copy Mode: Up/Down or j/k to select • Enter to copy • Esc / Ctrl+Y to exit")
+			helpText = helpTextStyle.Render(truncateHelp("Copy Mode: Up/Down or j/k to select • Enter to copy • Esc / Ctrl+Y to exit", maxHelpWidth))
 		} else {
-			helpText = helpTextStyle.Render("(write / for actions) • Ctrl+Y: copy mode • PgUp/PgDn: scroll page • Ctrl+Up/Down: scroll line")
+			helpText = helpTextStyle.Render(truncateHelp("(write / for actions) • Ctrl+Y: copy mode • PgUp/PgDn: scroll page • Ctrl+Up/Down: scroll line", maxHelpWidth))
 		}
 		views = append(views, helpText)
 
@@ -1149,14 +1163,23 @@ func formatTPS(tps float64) string {
 	return fmt.Sprintf("%.1f t/s", tps)
 }
 
-func renderHeader(width int, left string, right string) string {
+func renderHeader(width int, left string, center string, right string) string {
 	leftWidth := lipgloss.Width(left)
+	centerWidth := lipgloss.Width(center)
 	rightWidth := lipgloss.Width(right)
-	spaces := width - leftWidth - rightWidth
-	if spaces < 1 {
-		spaces = 1
+
+	// Try to place center exactly in the middle of the full header width.
+	centerStart := (width - centerWidth) / 2
+	leftPad := centerStart - leftWidth
+	if leftPad < 1 {
+		leftPad = 1
 	}
-	return left + strings.Repeat(" ", spaces) + right
+	rightPad := width - leftWidth - leftPad - centerWidth - rightWidth
+	if rightPad < 1 {
+		rightPad = 1
+	}
+
+	return left + strings.Repeat(" ", leftPad) + center + strings.Repeat(" ", rightPad) + right
 }
 
 func (m Model) isPopupActive() bool {
@@ -1220,6 +1243,45 @@ func (m Model) renderPopup() string {
 	return popupContainerStyle.
 		Width(m.viewport.Width).
 		Render(s.String())
+}
+
+// thinkModeCompact returns a compact emoji+block indicator for the current think setting.
+// The block-fill character encodes intensity: ▁=low ▄=medium ▆=high █=max.
+func thinkModeCompact(setting string) string {
+	switch setting {
+	case "true":
+		return "💡"
+	case "low":
+		return "💡▁"
+	case "medium":
+		return "💡▄"
+	case "high":
+		return "💡▆"
+	case "max":
+		return "💡█"
+	default: // "false"
+		return "—"
+	}
+}
+
+// truncateHelp clips text to maxWidth display columns, appending '…' if truncated.
+// This guarantees the help bar is always exactly one line regardless of terminal width.
+func truncateHelp(text string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(text) <= maxWidth {
+		return text
+	}
+	// Walk runes from the right until it fits with the ellipsis appended.
+	runes := []rune(text)
+	for i := len(runes) - 1; i > 0; i-- {
+		candidate := string(runes[:i]) + "…"
+		if lipgloss.Width(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	return "…"
 }
 
 func stripReasoning(content string) string {
