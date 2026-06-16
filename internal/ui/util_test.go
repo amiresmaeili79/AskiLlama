@@ -61,9 +61,9 @@ func TestThinkModeCompact(t *testing.T) {
 		setting string
 		want    string
 	}{
-		{"false", "—"},
-		{"", "—"},        // unknown falls to default
-		{"garbage", "—"}, // unknown falls to default
+		{"false", "💡❌"},
+		{"", "💡❌"},        // unknown falls to default
+		{"garbage", "💡❌"}, // unknown falls to default
 		{"true", "💡"},
 		{"low", "💡▁"},
 		{"medium", "💡▄"},

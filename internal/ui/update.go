@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"askillama/internal/ollama"
 
@@ -242,19 +243,30 @@ func (m Model) handlePopupKey(msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 		return true, m, nil
 
 	case "enter":
-		// Selecting a popup entry pre-fills the input with the command prefix,
-		// ready for the user to type an argument (or presses Enter again for
-		// no-arg commands like /model and /new which we dispatch immediately).
 		if len(matches) > 0 {
 			selected := matches[m.popupCursor].key
-			m.textInput.SetValue(selected + " ")
-			m.textInput.SetCursor(len(selected) + 1)
-			m.popupCursor = 0
-			if m.ready {
-				m.viewport.Height = max(m.height-m.baseHeight(), 3)
+			// Look up the command in the table to decide what to do:
+			//   - No-argument command (key has no trailing space) → dispatch now.
+			//   - Argument command (key has trailing space) → pre-fill so the
+			//     user can type the argument before pressing Enter again.
+			for _, c := range slashCommands {
+				if c.key == selected {
+					// Exact-match (no-arg): dispatch immediately.
+					newM, cmd := c.handler(m, "")
+					return true, newM, cmd
+				}
+				if strings.TrimRight(c.key, " ") == selected {
+					// Prefix-match (with-arg): pre-fill the full key including
+					// the trailing space so the cursor lands after it.
+					prefillInput(&m, c.key)
+					return true, m, nil
+				}
 			}
+			return true, m, nil
 		}
-		return true, m, nil
+		// No popup matches (e.g. user typed "/think high") — let Enter fall
+		// through to handleEnter() so the command gets dispatched normally.
+		return false, m, nil
 
 	case "esc":
 		m.textInput.Reset()
