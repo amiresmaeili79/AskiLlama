@@ -43,7 +43,14 @@ func (m *Model) saveSession(name string) error {
 	// MkdirAll is a no-op when the directory already exists, so calling it
 	// unconditionally is safe and avoids a separate existence check.
 	sessionsDir := filepath.Join(configDir, "askillama", "sessions")
-	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+	return m.saveSessionTo(sessionsDir, name)
+}
+
+// saveSessionTo writes the session to dir/name.json.
+// It is the testable core of saveSession; production code calls saveSession which
+// resolves the OS config directory first.
+func (m *Model) saveSessionTo(dir, name string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create sessions directory: %w", err)
 	}
 
@@ -60,11 +67,10 @@ func (m *Model) saveSession(name string) error {
 		return fmt.Errorf("failed to marshal session: %w", err)
 	}
 
-	filePath := filepath.Join(sessionsDir, name+".json")
+	filePath := filepath.Join(dir, name+".json")
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write session file: %w", err)
 	}
-
 	return nil
 }
 
@@ -79,7 +85,15 @@ func (m *Model) loadSession(name string) error {
 		return fmt.Errorf("could not find user config dir: %w", err)
 	}
 
-	filePath := filepath.Join(configDir, "askillama", "sessions", name+".json")
+	sessionsDir := filepath.Join(configDir, "askillama", "sessions")
+	return m.loadSessionFrom(sessionsDir, name)
+}
+
+// loadSessionFrom reads a session from dir/name.json and restores it into m.
+// It is the testable core of loadSession; production code calls loadSession which
+// resolves the OS config directory first.
+func (m *Model) loadSessionFrom(dir, name string) error {
+	filePath := filepath.Join(dir, name+".json")
 
 	// Stat before ReadFile to give a user-friendly "not found" error instead of
 	// a raw "open …: no such file or directory" message from ReadFile.
