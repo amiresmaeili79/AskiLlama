@@ -7,8 +7,8 @@ import (
 	"askillama/internal/ollama"
 
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Update is the Bubble Tea update function. It is a pure function that takes

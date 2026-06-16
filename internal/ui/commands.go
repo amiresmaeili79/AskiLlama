@@ -20,8 +20,9 @@ import (
 //   - Trailing space     →  prefix match, argument follows  (e.g. "/think ")
 //
 // The dispatcher uses this convention to:
-//   a) auto-prefill the input when the user types a bare argument-expecting command
-//   b) strip and pass the argument to the handler when the full form is typed
+//
+//	a) auto-prefill the input when the user types a bare argument-expecting command
+//	b) strip and pass the argument to the handler when the full form is typed
 //
 // The handler always receives a (possibly empty) argument string and returns
 // the updated model plus an optional tea.Cmd.

@@ -188,7 +188,7 @@ func TestRenderHeader(t *testing.T) {
 	li := strings.Index(result, left)
 	ci := strings.Index(result, center)
 	ri := strings.Index(result, right)
-	if !(li < ci && ci < ri) {
+	if li >= ci || ci >= ri {
 		t.Errorf("order wrong: left=%d center=%d right=%d in %q", li, ci, ri, result)
 	}
 }

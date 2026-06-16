@@ -24,11 +24,6 @@ func newTestModel() Model {
 	return m
 }
 
-// pressEnter synthesises a tea.KeyMsg for the Enter key.
-func pressEnter() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyEnter}
-}
-
 // pressKey synthesises a tea.KeyMsg for a named key string (e.g. "up", "k").
 func pressKey(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
