@@ -227,7 +227,7 @@ func (m Model) renderPopup() string {
 	}
 
 	return popupContainerStyle.
-		Width(m.viewport.Width).
+		Width(m.width - 2).
 		Render(s.String())
 }
 

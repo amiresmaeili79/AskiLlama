@@ -264,44 +264,17 @@ func TestHandleSlashCommand_Think_Invalid(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleSlashCommand — /stream
+// handleSlashCommand — /settings
 // ---------------------------------------------------------------------------
 
-func TestHandleSlashCommand_Stream(t *testing.T) {
-	tests := []struct {
-		input      string
-		wantStream bool
-	}{
-		{"/stream true", true},
-		{"/stream yes", true},
-		{"/stream on", true},
-		{"/stream false", false},
-		{"/stream no", false},
-		{"/stream off", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			m := newTestModel()
-			m2, _, handled := m.handleSlashCommand(tc.input)
-			if !handled {
-				t.Fatal("expected /stream to be handled")
-			}
-			if m2.cfg.Stream != tc.wantStream {
-				t.Errorf("cfg.Stream: got %v, want %v", m2.cfg.Stream, tc.wantStream)
-			}
-		})
-	}
-}
-
-func TestHandleSlashCommand_Stream_Invalid(t *testing.T) {
+func TestHandleSlashCommand_Settings(t *testing.T) {
 	m := newTestModel()
-	m2, _, handled := m.handleSlashCommand("/stream maybe")
-
+	m2, _, handled := m.handleSlashCommand("/settings")
 	if !handled {
-		t.Fatal("expected /stream to be handled")
+		t.Fatal("expected /settings to be handled")
 	}
-	if m2.err == nil {
-		t.Error("expected error for invalid stream setting")
+	if m2.state != stateSettings {
+		t.Errorf("state: got %v, want stateSettings", m2.state)
 	}
 }
 
