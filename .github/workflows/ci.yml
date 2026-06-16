@@ -55,3 +55,96 @@ jobs:
 
       - name: Build
         run: go build -v ./...
+
+  test:
+    name: Run Tests & Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Run Tests
+        id: run_tests
+        run: |
+          set +e
+          go test -coverprofile=coverage.out -covermode=atomic ./... > test_result.log
+          TEST_EXIT_CODE=$?
+          set -e
+          cat test_result.log
+          echo "exit_code=$TEST_EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # Extract overall coverage
+          TOTAL_COV=$(go tool cover -func=coverage.out | grep total | awk '{print $NF}')
+          echo "total_cov=$TOTAL_COV" >> $GITHUB_OUTPUT
+
+      - name: Generate PR Comment
+        if: github.event_name == 'pull_request'
+        run: |
+          TEST_EXIT_CODE="${{ steps.run_tests.outputs.exit_code }}"
+          TOTAL_COV="${{ steps.run_tests.outputs.total_cov }}"
+          
+          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Passed"
+          else
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Failed"
+          fi
+          
+          echo "### Go Test & Coverage Report 🧪" > comment.md
+          echo "" >> comment.md
+          echo "- **Status**: $STATUS_EMOJI $STATUS_TEXT" >> comment.md
+          echo "- **Overall Coverage**: \`$TOTAL_COV\`" >> comment.md
+          echo "" >> comment.md
+          echo "#### Package Coverage Summary" >> comment.md
+          echo "| Package | Status | Coverage |" >> comment.md
+          echo "| :--- | :--- | :--- |" >> comment.md
+          
+          # Parse package details from the test log
+          while read -r line; do
+            if [[ $line == *"coverage:"* ]]; then
+              pkg=$(echo "$line" | awk '{pkg = ($1 == "ok" || $1 == "FAIL" ? $2 : $1); print pkg}')
+              cov=$(echo "$line" | awk '{print $(NF-2)}')
+              
+              if [[ $line == *"FAIL"* ]]; then
+                echo "| \`$pkg\` | ❌ Fail | \`$cov\` |" >> comment.md
+              elif [[ $cov == "0.0%" ]]; then
+                echo "| \`$pkg\` | ⚠️ No tests (0.0%) | \`$cov\` |" >> comment.md
+              else
+                echo "| \`$pkg\` | ✅ Pass | \`$cov\` |" >> comment.md
+              fi
+            fi
+          done < test_result.log
+          
+          cat comment.md
+
+      - name: Post PR Comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          EXISTING_COMMENT_ID=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("Go Test & Coverage Report")) | .id' | head -n 1)
+          
+          if [ -n "$EXISTING_COMMENT_ID" ]; then
+            echo "Updating existing comment..."
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID" -F body=@comment.md
+          else
+            echo "Posting new comment..."
+            gh pr comment "$PR_NUMBER" --body-file comment.md
+          fi
+          set -e
+
+      - name: Enforce Test Success
+        run: |
+          exit ${{ steps.run_tests.outputs.exit_code }}
