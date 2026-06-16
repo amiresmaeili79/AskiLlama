@@ -64,7 +64,14 @@ func (m *Model) renderMessage(i int, innerWidth int) string {
 	}
 
 	// --- Content ---
-	contentWidth := max(innerWidth-lipgloss.Width(roleLabel)-1, 10)
+	contentWidth := innerWidth
+	if msg.Role == "user" || msg.Role == "system" {
+		contentWidth -= 2
+	}
+	if m.state == stateCopy {
+		contentWidth -= 3
+	}
+	contentWidth = max(contentWidth, 10)
 
 	// Normalize tabs to spaces to prevent terminal wrapping issues.
 	content := strings.ReplaceAll(msg.Content, "\t", "    ")
@@ -82,8 +89,8 @@ func (m *Model) renderMessage(i int, innerWidth int) string {
 		body = lipgloss.NewStyle().Width(contentWidth).Foreground(msgColor).Render(content)
 	}
 
-	// Indent user messages slightly for visual breathing room.
-	if msg.Role == "user" {
+	// Indent user and system messages slightly for visual breathing room.
+	if msg.Role == "user" || msg.Role == "system" {
 		body = indentLines(body, "  ")
 	}
 
@@ -92,9 +99,9 @@ func (m *Model) renderMessage(i int, innerWidth int) string {
 		body = indentLines(body, "   ")
 	}
 
-	// User messages get a blank line between label and content; others don't.
+	// User and system messages get a blank line between label and content; others don't.
 	labelSep := "\n"
-	if msg.Role == "user" {
+	if msg.Role == "user" || msg.Role == "system" {
 		labelSep = "\n\n"
 	}
 
