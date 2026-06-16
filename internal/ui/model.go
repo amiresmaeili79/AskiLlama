@@ -20,6 +20,7 @@ const (
 	stateSelectModel                // user is picking a model from the list
 	stateChat                       // normal chat interaction
 	stateCopy                       // browsing messages to copy one
+	stateSettings                   // universal settings app
 )
 
 // ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ var actions = []action{
 	{key: "/model", description: "change model"},
 	{key: "/new", description: "new session"},
 	{key: "/think", description: "set reasoning capability (false/true/low/medium/high/max)"},
-	{key: "/stream", description: "toggle stream mode (true/false)"},
+	{key: "/settings", description: "open settings"},
 	{key: "/system", description: "set system prompt for current session"},
 	{key: "/save", description: "save current session: /save [session_name]"},
 	{key: "/load", description: "load a saved session: /load [session_name]"},
@@ -91,6 +92,10 @@ type Model struct {
 	// Render cache: renderedMessages[i] stores the glamour-rendered body for
 	// messages[i]. Invalidated (set to nil) on window resize or theme change.
 	renderedMessages []string
+
+	// Settings state
+	settingsCursor   int
+	settingsURLInput textinput.Model
 }
 
 // ---------------------------------------------------------------------------

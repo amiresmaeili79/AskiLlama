@@ -30,6 +30,8 @@ func (m Model) View() string {
 		return m.viewSelectModel()
 	case stateChat, stateCopy:
 		return m.viewChat()
+	case stateSettings:
+		return m.viewSettings()
 	}
 	return ""
 }

@@ -6,6 +6,7 @@ import (
 
 	"askillama/internal/ollama"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -40,10 +41,10 @@ var slashCommands = []slashCmd{
 	// No-argument commands (exact match)
 	{"/model", cmdModel},
 	{"/new", cmdNew},
+	{"/settings", cmdSettings},
 
 	// Argument commands (prefix match — note the trailing space)
 	{"/think ", cmdThink},
-	{"/stream ", cmdStream},
 	{"/system ", cmdSystem},
 	{"/save ", cmdSave},
 	{"/load ", cmdLoad},
@@ -158,26 +159,20 @@ func cmdThink(m Model, arg string) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// cmdStream handles "/stream <setting>".
-// Valid settings: true | yes | on | false | no | off
-func cmdStream(m Model, arg string) (Model, tea.Cmd) {
-	switch arg {
-	case "true", "yes", "on":
-		m.cfg.Stream = true
-		_ = m.cfg.Save()
-		m.err = nil
-		resetInput(&m)
-		m.refreshViewport()
-	case "false", "no", "off":
-		m.cfg.Stream = false
-		_ = m.cfg.Save()
-		m.err = nil
-		resetInput(&m)
-		m.refreshViewport()
-	default:
-		m.err = fmt.Errorf("invalid stream setting. Choose from: true, false")
-		m.textInput.Reset()
-	}
+// cmdSettings handles "/settings" — switches to settings state.
+func cmdSettings(m Model, _ string) (Model, tea.Cmd) {
+	m.state = stateSettings
+	m.settingsCursor = 0
+
+	m.settingsURLInput = textinput.New()
+	m.settingsURLInput.Placeholder = "http://localhost:11434"
+	m.settingsURLInput.SetValue(m.cfg.HostURL)
+	m.settingsURLInput.CharLimit = 100
+	m.settingsURLInput.Width = 40
+	m.settingsURLInput.Blur()
+
+	m.err = nil
+	resetInput(&m)
 	return m, nil
 }
 

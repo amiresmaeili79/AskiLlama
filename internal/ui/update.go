@@ -134,6 +134,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleKeyChat(msg)
 	case stateCopy:
 		return m.handleKeyCopy(msg)
+	case stateSettings:
+		return m.handleKeySettings(msg)
 	}
 	return m, nil
 }
